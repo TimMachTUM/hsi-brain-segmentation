@@ -25,7 +25,7 @@ def train_and_validate(model, trainloader, validationloader, criterion, optimize
         running_loss = 0.0
         train_loss = 0.0
         for i, data in enumerate(trainloader):
-            inputs, labels, image = data[0].to(device), data[1].to(device).float(), data[2]
+            inputs, labels = data[0].to(device), data[1].to(device).float()
             outputs = model(inputs)
             optimizer.zero_grad()
             loss = criterion(outputs, labels)

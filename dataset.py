@@ -87,6 +87,7 @@ class HSIDataset(Dataset):
         hsi_image = spectral.open_image(raw_path).load()
         label = spectral.open_image(gt_path).load()
         img = cv2.imread(img_path, cv2.IMREAD_UNCHANGED)
+        img = img[:,:,[2,1,0]]
 
         hsi_image = hsi_image.transpose(2,0,1)
         label = (label.transpose(2,0,1) == 3).astype(int)
@@ -95,8 +96,10 @@ class HSIDataset(Dataset):
         hsi_image = torch.tensor(hsi_image, dtype=torch.float32)
         label = torch.tensor(label, dtype=torch.int8)
 
-        if self.image_transform:
+        if self.image_transform and self.label_transform:
             hsi_image = self.image_transform(hsi_image)
+            label = self.label_transform(label)
+            img = cv2.resize(img, (512, 512), interpolation=cv2.INTER_LINEAR)
 
         return hsi_image, label, img
     
@@ -137,6 +140,9 @@ class HSIDataset(Dataset):
 
         mean, std = self.get_mean_std()
         self.image_transform = transforms.Compose([
+            transforms.Resize([512, 512]),
             transforms.Normalize(mean, std)
         ])
-
+        self.label_transform = transforms.Compose([
+            transforms.Resize([512, 512], interpolation=Image.NEAREST)
+        ])

@@ -124,7 +124,6 @@ def predict(model, data, device):
 def show_overlay(model, data, device):
     prediction = predict(model, data[0], device)
     image = data[2]
-    image = image[:,:,[2,1,0]]
     overlay = np.zeros_like(image)
     overlay[prediction.cpu().numpy().squeeze(0) == 1] = [0, 255, 0]
     combined = cv2.addWeighted(image, 0.7, overlay, 0.3, 0)

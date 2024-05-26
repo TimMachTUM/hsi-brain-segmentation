@@ -103,12 +103,13 @@ def evaluate_model(model, dataloader, device, with_wandb=True):
     print(f'Precision: {precision:.4f}, Recall: {recall:.4f}, F1 Score: {f1_score:.4f}, Dice Score: {dice_score:.4f}, Accuracy: {accuracy:.4f}')
 
 
-def model_pipeline(model, trainloader, validationloader, testloader, criterion, optimizer, config, project, epochs=10, model_name=None, device='cuda', batch_print=10):
+def model_pipeline(model, trainloader, validationloader, testloader, criterion, optimizer, config, project, epochs=10, model_name=None, device='cuda', batch_print=10, evaluate=True):
     with wandb.init(project=project, config=config):
         config = wandb.config
         model = model.to(device)
         train_loss, val_loss = train_and_validate(model, trainloader, validationloader, criterion, optimizer, epochs, model_name, device, batch_print)
-        evaluate_model(model, testloader, device)
+        if evaluate:
+            evaluate_model(model, testloader, device)
         return model, train_loss, val_loss
 
 def predict(model, data, device):

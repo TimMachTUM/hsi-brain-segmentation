@@ -6,6 +6,7 @@ import os
 import spectral
 import numpy as np
 import cv2
+import random
 
 class SegmentationDataset(Dataset):
     def __init__(self, image_dir, label_dir, image_transform=None, label_transform=None):
@@ -146,3 +147,83 @@ class HSIDataset(Dataset):
         self.label_transform = transforms.Compose([
             transforms.Resize([512, 512], interpolation=Image.NEAREST)
         ])
+
+class SegmentationDatasetWithRandomCrops(Dataset):
+    def __init__(self, image_dir, label_dir, image_transform=None, label_transform=None, crop_height=512, crop_width=512, threshold=0.1):
+        """
+        Args:
+            image_dir (string): Directory with all the original images.
+            label_dir (string): Directory with all the labels.
+            image_transform (callable, optional): Optional transform to be applied on a sample.
+            label_transform (callable, optional): Optional transform to be applied on a sample.
+            crop_height (int): Desired height of the cropped image.
+            crop_width (int): Desired width of the cropped image.
+            threshold (float): Minimum required vessel ratio in the cropped image.
+        """
+        self.image_dir = image_dir
+        self.label_dir = label_dir
+        self.image_transform = image_transform
+        self.label_transform = label_transform
+        self.crop_height = crop_height
+        self.crop_width = crop_width
+        self.threshold = threshold
+        self.images = os.listdir(image_dir)
+
+    def __len__(self):
+        return len(self.images)
+
+    def __getitem__(self, idx):
+        img_name = os.path.join(self.image_dir, self.images[idx])
+        label_name = os.path.join(self.label_dir, self.images[idx])
+        
+        image = Image.open(img_name).convert("RGB")
+        label = Image.open(label_name).convert("L")  # Convert label image to grayscale
+
+        image = np.array(image)
+        label = np.array(label)
+        label = (label > 0).astype(np.uint8)  # Binarize the label image
+        
+        # Apply the random cropping with condition
+        cropped_image, cropped_label = self.random_crop_with_condition(image, label, self.crop_height, self.crop_width, self.threshold)
+
+        if cropped_image is None or cropped_label is None:
+            # Handling case where no valid crop is found, you could choose to not augment or use the full image as a fallback
+            cropped_image = image
+            cropped_label = label
+
+        # Convert numpy arrays back to PIL images
+        cropped_image = Image.fromarray(cropped_image)
+        cropped_label[cropped_label == 1] = 255
+
+        if self.image_transform:
+            cropped_image = self.image_transform(cropped_image)
+        
+        if self.label_transform:
+            cropped_label = self.label_transform(cropped_label)
+
+
+        return cropped_image, cropped_label
+    
+    def calculate_vessel_ratio(self, mask):
+        return np.sum(mask == 1) / np.prod(mask.shape)
+
+    def random_crop_with_condition(self, image, mask, crop_height, crop_width, threshold=0.1):
+        assert image.shape[:2] == mask.shape[:2], "Image and mask must have the same dimensions."
+
+        height, width = image.shape[:2]
+        for _ in range(100):  # Try up to 100 times to find a valid crop
+            x = random.randint(0, width - crop_width)
+            y = random.randint(0, height - crop_height)
+            cropped_image = image[y:y+crop_height, x:x+crop_width]
+            cropped_mask = mask[y:y+crop_height, x:x+crop_width]
+
+            if self.calculate_vessel_ratio(cropped_mask) >= threshold:
+                return cropped_image, cropped_mask
+
+        # If no valid crop is found, return a center crop
+        center_x = (width - crop_width) // 2
+        center_y = (height - crop_height) // 2
+        center_cropped_image = image[center_y:center_y+crop_height, center_x:center_x+crop_width]
+        center_cropped_mask = mask[center_y:center_y+crop_height, center_x:center_x+crop_width]
+        
+        return center_cropped_image, center_cropped_mask

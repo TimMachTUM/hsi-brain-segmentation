@@ -9,7 +9,7 @@ import cv2
 import random
 
 class SegmentationDataset(Dataset):
-    def __init__(self, image_dir, label_dir, image_transform=None, label_transform=None):
+    def __init__(self, image_dir, label_dir, image_transform=None, label_transform=None, augmentation=None):
         """
         Args:
             image_dir (string): Directory with all the original images.
@@ -21,6 +21,7 @@ class SegmentationDataset(Dataset):
         self.label_dir = label_dir
         self.image_transform = image_transform
         self.label_transform = label_transform
+        self.augmentation = augmentation
         self.images = os.listdir(image_dir)
 
     def __len__(self):
@@ -34,6 +35,9 @@ class SegmentationDataset(Dataset):
         image = Image.open(img_name).convert("RGB")
         label = Image.open(label_name).convert("L")  # Convert label image to grayscale if needed
 
+        if self.augmentation:
+            image, label = self.augmentation(image, label)
+            
         if self.image_transform:
             image = self.image_transform(image)
         

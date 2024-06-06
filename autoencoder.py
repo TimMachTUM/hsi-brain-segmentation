@@ -25,7 +25,7 @@ class ResidualBlock(nn.Module):
         return out
 
 class Autoencoder(nn.Module):
-    def __init__(self):
+    def __init__(self, output_channels=1):
         super(Autoencoder, self).__init__()
         self.encoder = nn.Sequential(
             nn.Conv2d(826, 512, kernel_size=3, stride=1, padding=1),
@@ -40,11 +40,11 @@ class Autoencoder(nn.Module):
             nn.BatchNorm2d(128),
             nn.ReLU(),
             ResidualBlock(128),
-            nn.Conv2d(128, 1, kernel_size=3, stride=1, padding=1),
+            nn.Conv2d(128, output_channels, kernel_size=3, stride=1, padding=1),
             nn.Sigmoid()
         )
         self.decoder = nn.Sequential(
-            nn.Conv2d(1, 128, kernel_size=3, stride=1, padding=1),
+            nn.Conv2d(output_channels, 128, kernel_size=3, stride=1, padding=1),
             nn.BatchNorm2d(128),
             nn.ReLU(),
             ResidualBlock(128),
@@ -144,6 +144,7 @@ def train_and_validate_autoencoder(model, trainloader, validationloader, criteri
         train_losses, val_losses: List of losses per epoch
     """
     train_losses, val_losses = [], []
+    min_val_loss = np.inf
     wandb.watch(model, criterion, log="all", log_freq=10)
     
     for epoch in range(epochs):
@@ -169,12 +170,6 @@ def train_and_validate_autoencoder(model, trainloader, validationloader, criteri
         train_losses.append(train_loss)
         print(f'Epoch {epoch+1}, Train Loss: {train_loss:.4f}')
         wandb.log({"epoch":epoch+1, "train/loss": train_loss}, step=epoch+1)
-
-        if model_name:
-            torch.save(model.state_dict(), f'./models/{model_name}_epoch{epoch+1}.pth')
-            model_artifact = wandb.Artifact(f"{model_name}_epoch{epoch+1}", type="model")
-            model_artifact.add_file(f'./models/{model_name}_epoch{epoch+1}.pth')
-            wandb.log_artifact(model_artifact)
         
         # Validation phase
         model.eval()
@@ -196,6 +191,14 @@ def train_and_validate_autoencoder(model, trainloader, validationloader, criteri
         val_loss = val_running_loss / len(validationloader)
         val_losses.append(val_loss)
 
+        if model_name:
+            if val_loss < min_val_loss:
+                min_val_loss = val_loss
+                torch.save(model.state_dict(), f'./models/{model_name}.pth')
+                model_artifact = wandb.Artifact(f"{model_name}", type="model")
+                model_artifact.add_file(f'./models/{model_name}.pth')
+                wandb.log_artifact(model_artifact)
+
         print(f'Epoch {epoch+1}, Validation Loss: {val_loss:.4f}')
         wandb.log({"epoch":epoch+1, "validation/loss": val_loss}, step=epoch+1)
     
@@ -214,6 +217,7 @@ def train_and_validate_variational_autoencoder(model, trainloader, validationloa
         train_losses, val_losses: List of losses per epoch
     """
     train_losses, val_losses = [], []
+    min_val_loss = np.inf
     
     for epoch in range(epochs):
         model.train()
@@ -238,12 +242,6 @@ def train_and_validate_variational_autoencoder(model, trainloader, validationloa
         train_losses.append(train_loss)
         print(f'Epoch {epoch+1}, Train Loss: {train_loss:.4f}')
         wandb.log({"epoch":epoch+1, "train/loss": train_loss}, step=epoch+1)
-
-        if model_name:
-            torch.save(model.state_dict(), f'./models/{model_name}_epoch{epoch+1}.pth')
-            model_artifact = wandb.Artifact(f"{model_name}_epoch{epoch+1}", type="model")
-            model_artifact.add_file(f'./models/{model_name}_epoch{epoch+1}.pth')
-            wandb.log_artifact(model_artifact)
         
         # Validation phase
         model.eval()
@@ -259,6 +257,14 @@ def train_and_validate_variational_autoencoder(model, trainloader, validationloa
                 if i == 0:
                     encoded_output = outputs.mean(dim=1, keepdim=True)[0, 0].cpu().numpy()  # Get the first image and the first channel
                     wandb.log({"Validation Image": wandb.Image(encoded_output, caption=f"Epoch {epoch+1}")}, step=epoch+1)
+
+        if model_name:
+            if val_loss < min_val_loss:
+                min_val_loss = val_loss
+                torch.save(model.state_dict(), f'./models/{model_name}.pth')
+                model_artifact = wandb.Artifact(f"{model_name}", type="model")
+                model_artifact.add_file(f'./models/{model_name}.pth')
+                wandb.log_artifact(model_artifact)
         
         val_loss = val_running_loss / len(validationloader)
         val_losses.append(val_loss)

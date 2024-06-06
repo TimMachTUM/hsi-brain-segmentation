@@ -18,6 +18,7 @@ def train_and_validate(model, trainloader, validationloader, criterion, optimize
         train_losses, val_losses: List of losses per epoch
     """
     train_losses, val_losses = [], []
+    min_val_loss = np.inf
     wandb.watch(model, criterion, log="all", log_freq=10)
     
     for epoch in range(epochs):
@@ -43,12 +44,6 @@ def train_and_validate(model, trainloader, validationloader, criterion, optimize
         train_losses.append(train_loss)
         print(f'Epoch {epoch+1}, Train Loss: {train_loss:.4f}')
         wandb.log({"epoch":epoch+1, "train/loss": train_loss}, step=epoch+1)
-
-        if model_name:
-            torch.save(model.state_dict(), f'./models/{model_name}_epoch{epoch+1}.pth')
-            model_artifact = wandb.Artifact(f"{model_name}_epoch{epoch+1}", type="model")
-            model_artifact.add_file(f'./models/{model_name}_epoch{epoch+1}.pth')
-            wandb.log_artifact(model_artifact)
         
         # Validation phase
         model.eval()
@@ -63,6 +58,15 @@ def train_and_validate(model, trainloader, validationloader, criterion, optimize
         
         val_loss = val_running_loss / len(validationloader)
         val_losses.append(val_loss)
+
+        if model_name:
+            if val_loss < min_val_loss:
+                min_val_loss = val_loss
+                torch.save(model.state_dict(), f'./models/{model_name}.pth')
+                model_artifact = wandb.Artifact(f"{model_name}", type="model")
+                model_artifact.add_file(f'./models/{model_name}.pth')
+                wandb.log_artifact(model_artifact)
+
         print(f'Epoch {epoch+1}, Validation Loss: {val_loss:.4f}')
         wandb.log({"epoch":epoch+1, "validation/loss": val_loss}, step=epoch+1)
     
@@ -109,6 +113,8 @@ def model_pipeline(model, trainloader, validationloader, testloader, criterion, 
         model = model.to(device)
         train_loss, val_loss = train_and_validate(model, trainloader, validationloader, criterion, optimizer, epochs, model_name, device, batch_print)
         if evaluate:
+            if model_name:
+                model.load_state_dict(torch.load(f'./models/{model_name}.pth'))
             evaluate_model(model, testloader, device)
         return model, train_loss, val_loss
 

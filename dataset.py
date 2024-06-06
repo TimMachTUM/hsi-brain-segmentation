@@ -16,6 +16,7 @@ class SegmentationDataset(Dataset):
             label_dir (string): Directory with all the labels.
             image_transform (callable, optional): Optional transform to be applied on a sample.
             label_transform (callable, optional): Optional transform to be applied on a sample.
+            augmentation (callable, optional): Optional transform to be applied on a sample.
         """
         self.image_dir = image_dir
         self.label_dir = label_dir
@@ -231,3 +232,16 @@ class SegmentationDatasetWithRandomCrops(Dataset):
         center_cropped_mask = mask[center_y:center_y+crop_height, center_x:center_x+crop_width]
         
         return center_cropped_image, center_cropped_mask
+    
+class AugmentedDataset(torch.utils.data.Dataset):
+    def __init__(self, subset, augmentation):
+        self.subset = subset
+        self.augmentation = augmentation
+
+    def __len__(self):
+        return len(self.subset)
+
+    def __getitem__(self, idx):
+        image, label = self.subset[idx]
+        image, label = self.augmentation(image, label)
+        return image, label

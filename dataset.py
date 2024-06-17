@@ -66,9 +66,11 @@ class HSIDataset(Dataset):
                 raw_path = os.path.join(subdir_path, 'raw.hdr')
                 gt_path = os.path.join(subdir_path, 'gtMap.hdr')
                 img_path = os.path.join(subdir_path, 'image.jpg')
+                dark_path = os.path.join(subdir_path, 'darkReference.hdr')
+                white_path = os.path.join(subdir_path, 'whiteReference.hdr')
                 
                 if os.path.exists(raw_path) and os.path.exists(gt_path) and os.path.exists(img_path):
-                    self.data_paths.append((raw_path, gt_path, img_path))
+                    self.data_paths.append((raw_path, gt_path, img_path, dark_path, white_path))
 
         self.data_paths.sort()
 
@@ -87,14 +89,22 @@ class HSIDataset(Dataset):
         Returns:
         tuple: (image, label) where `image` is a hyperspectral image and `label` is the corresponding ground truth map.
         """
-        raw_path, gt_path, img_path = self.data_paths[idx]
+        raw_path, gt_path, img_path, dark_path, white_path = self.data_paths[idx]
         
         # Load the hyperspectral image and label
         hsi_image = spectral.open_image(raw_path).load()
+        dark_reference = spectral.open_image(dark_path).load()
+        white_reference = spectral.open_image(white_path).load()
+
+        dark_full = np.tile(dark_reference, (hsi_image.shape[0], 1, 1))
+        white_full = np.tile(white_reference, (hsi_image.shape[0], 1, 1))
+
         label = spectral.open_image(gt_path).load()
         img = cv2.imread(img_path, cv2.IMREAD_UNCHANGED)
         img = img[:,:,[2,1,0]]
 
+        hsi_image = (hsi_image - dark_full) / (white_full - dark_full)
+        hsi_image[hsi_image <= 0] = 10**-2
         hsi_image = hsi_image.transpose(2,0,1)
         label = (label.transpose(2,0,1) == 3).astype(int)
 
@@ -147,7 +157,6 @@ class HSIDataset(Dataset):
         mean, std = self.get_mean_std()
         self.image_transform = transforms.Compose([
             transforms.CenterCrop(224),
-            transforms.Normalize(mean, std)
         ])
         self.label_transform = transforms.Compose([
             transforms.CenterCrop(224)

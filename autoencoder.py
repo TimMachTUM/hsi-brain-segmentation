@@ -124,7 +124,7 @@ def vae_loss(recon_x, x, mu, logvar):
     return recon_loss + kl_div
 
 def model_pipeline_autoencoder(model, trainloader, validationloader, criterion, optimizer, config, project, epochs=10, model_name=None, device='cuda', batch_print=10):
-    with wandb.init(project=project, config=config):
+    with wandb.init(project=project, config=config, name=config["model"]):
         config = wandb.config
         model = model.to(device)
         train_loss, val_loss = train_and_validate_autoencoder(model, trainloader, validationloader, criterion, optimizer, epochs, model_name, device, batch_print)
@@ -183,9 +183,15 @@ def train_and_validate_autoencoder(model, trainloader, validationloader, criteri
                 val_running_loss += loss.item()
 
                 if i == 0:
-                    encoded_output = model.encoder(inputs)[0, 0].cpu().numpy()  # Get the first image and the first channel
-                    encoded_output = (encoded_output - encoded_output.min()) / (encoded_output.max() - encoded_output.min()) * 255
+                    encoded_output = model.encoder(inputs)[0].cpu().numpy()  # Get the first image in the batch
+                    # Normalize the output image to be in the range [0, 255]
+                    encoded_output -= encoded_output.min()  # Shift to start from 0
+                    encoded_output /= encoded_output.max()  # Scale to max of 1
+                    encoded_output *= 255  # Scale to max of 255
                     encoded_output = encoded_output.astype(np.uint8)
+                    encoded_output = np.transpose(encoded_output, (1, 2, 0))
+
+                    # Log the RGB image to WandB
                     wandb.log({"Validation Image": wandb.Image(encoded_output, caption=f"Epoch {epoch+1}")}, step=epoch+1)
         
         val_loss = val_running_loss / len(validationloader)

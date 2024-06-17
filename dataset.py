@@ -105,7 +105,7 @@ class HSIDataset(Dataset):
         if self.image_transform and self.label_transform:
             hsi_image = self.image_transform(hsi_image)
             label = self.label_transform(label)
-            img = cv2.resize(img, (512, 512), interpolation=cv2.INTER_LINEAR)
+            img = self.center_crop(img, (224, 224))
 
         return hsi_image, label, img
     
@@ -146,12 +146,35 @@ class HSIDataset(Dataset):
 
         mean, std = self.get_mean_std()
         self.image_transform = transforms.Compose([
-            transforms.Resize([512, 512]),
+            transforms.CenterCrop(224),
             transforms.Normalize(mean, std)
         ])
         self.label_transform = transforms.Compose([
-            transforms.Resize([512, 512], interpolation=Image.NEAREST)
+            transforms.CenterCrop(224)
         ])
+
+    def center_crop(self, image, crop_size):
+        """
+        Perform a center crop on the image.
+
+        Args:
+        image (numpy array): The input image.
+        crop_size (tuple): The size of the crop (height, width).
+
+        Returns:
+        numpy array: The cropped image.
+        """
+        height, width, _ = image.shape
+        new_height, new_width = crop_size
+
+        # Calculate the coordinates for the center crop
+        start_x = width // 2 - (new_width // 2)
+        start_y = height // 2 - (new_height // 2)
+
+        # Perform the crop
+        cropped_image = image[start_y:start_y + new_height, start_x:start_x + new_width]
+
+        return cropped_image
 
 class SegmentationDatasetWithRandomCrops(Dataset):
     def __init__(self, image_dir, label_dir, image_transform=None, label_transform=None, crop_height=512, crop_width=512, threshold=0.1):
@@ -232,16 +255,3 @@ class SegmentationDatasetWithRandomCrops(Dataset):
         center_cropped_mask = mask[center_y:center_y+crop_height, center_x:center_x+crop_width]
         
         return center_cropped_image, center_cropped_mask
-    
-class AugmentedDataset(torch.utils.data.Dataset):
-    def __init__(self, subset, augmentation):
-        self.subset = subset
-        self.augmentation = augmentation
-
-    def __len__(self):
-        return len(self.subset)
-
-    def __getitem__(self, idx):
-        image, label = self.subset[idx]
-        image, label = self.augmentation(image, label)
-        return image, label

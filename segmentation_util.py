@@ -108,7 +108,7 @@ def evaluate_model(model, dataloader, device, with_wandb=True):
 
 
 def model_pipeline(model, trainloader, validationloader, testloader, criterion, optimizer, config, project, epochs=10, model_name=None, device='cuda', batch_print=10, evaluate=True):
-    with wandb.init(project=project, config=config):
+    with wandb.init(project=project, config=config, name=model_name):
         config = wandb.config
         model = model.to(device)
         train_loss, val_loss = train_and_validate(model, trainloader, validationloader, criterion, optimizer, epochs, model_name, device, batch_print)

@@ -49,7 +49,7 @@ class SegmentationDataset(Dataset):
 
 
 class HSIDataset(Dataset):
-    def __init__(self, root_dir, image_transform=None):
+    def __init__(self, root_dir, image_transform=None, window=None):
         """
         Initialize the dataset with the path to the data.
         Args:
@@ -58,6 +58,7 @@ class HSIDataset(Dataset):
         self.root_dir = root_dir
         self.data_paths = []  # To store paths of the hyperspectral images and labels
         self.image_transform = image_transform
+        self.window = window
 
         # Iterate through each subdirectory in the root directory
         for subdir in os.listdir(root_dir):
@@ -107,6 +108,13 @@ class HSIDataset(Dataset):
         hsi_image[hsi_image <= 0] = 10**-2
         hsi_image = hsi_image.transpose(2,0,1)
         label = (label.transpose(2,0,1) == 3).astype(int)
+
+
+
+        if self.window is not None:
+            hsi_image_median = np.median(hsi_image[self.window[0]:self.window[1], :, :], axis=0)
+            hsi_image = (hsi_image_median - np.min(hsi_image_median)) / (np.max(hsi_image_median) - np.min(hsi_image_median))
+            hsi_image = np.expand_dims(hsi_image, axis=0)
 
         # Convert to PyTorch tensors
         hsi_image = torch.tensor(hsi_image, dtype=torch.float32)

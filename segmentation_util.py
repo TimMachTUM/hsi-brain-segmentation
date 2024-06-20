@@ -118,18 +118,19 @@ def model_pipeline(model, trainloader, validationloader, testloader, criterion, 
             evaluate_model(model, testloader, device)
         return model, train_loss, val_loss
 
-def predict(model, data, device):
+def predict(model, data, device, with_sigmoid=True):
     model.to(device)
     model.eval()
     data = data.unsqueeze(0).to(device)
     with torch.no_grad():
         prediction = model(data)
-        prediction = torch.sigmoid(prediction)
+        if with_sigmoid:
+            prediction = torch.sigmoid(prediction)
         prediction = (prediction > 0.5).float()
     return prediction.squeeze(1)
 
-def show_overlay(model, data, device):
-    prediction = predict(model, data[0], device)
+def show_overlay(model, data, device, with_sigmoid=True):
+    prediction = predict(model, data[0], device, with_sigmoid=with_sigmoid)
     image = data[2]
     overlay = np.zeros_like(image)
     overlay[prediction.cpu().numpy().squeeze(0) == 1] = [0, 255, 0]

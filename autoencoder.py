@@ -30,6 +30,47 @@ class Autoencoder(nn.Module):
         self.encoder = nn.Sequential(
             nn.Conv2d(826, 512, kernel_size=3, stride=1, padding=1),
             nn.BatchNorm2d(512),
+            nn.ReLU(),
+            ResidualBlock(512),
+            nn.Conv2d(512, 256, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(256),
+            nn.ReLU(),
+            ResidualBlock(256),
+            nn.Conv2d(256, 128, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(128),
+            nn.ReLU(),
+            ResidualBlock(128),
+            nn.Conv2d(128, output_channels, kernel_size=3, stride=1, padding=1),
+            nn.Sigmoid()
+        )
+        self.decoder = nn.Sequential(
+            nn.Conv2d(output_channels, 128, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(128),
+            nn.ReLU(),
+            ResidualBlock(128),
+            nn.Conv2d(128, 256, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(256),
+            nn.ReLU(),
+            ResidualBlock(256),
+            nn.Conv2d(256, 512, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(512),
+            nn.ReLU(),
+            ResidualBlock(512),
+            nn.Conv2d(512, 826, kernel_size=3, stride=1, padding=1)
+        )
+
+    def forward(self, x):
+        x = self.encoder(x)
+        x = self.decoder(x)
+        return x
+    
+
+class DeeperAutoencoder(nn.Module):
+    def __init__(self, output_channels=1):
+        super(DeeperAutoencoder, self).__init__()
+        self.encoder = nn.Sequential(
+            nn.Conv2d(826, 512, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(512),
             nn.LeakyReLU(0.2),
             ResidualBlock(512),
             nn.Conv2d(512, 256, kernel_size=3, stride=1, padding=1),

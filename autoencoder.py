@@ -30,35 +30,43 @@ class Autoencoder(nn.Module):
         self.encoder = nn.Sequential(
             nn.Conv2d(826, 512, kernel_size=3, stride=1, padding=1),
             nn.BatchNorm2d(512),
-            nn.ReLU(),
+            nn.LeakyReLU(0.2),
             ResidualBlock(512),
             nn.Conv2d(512, 256, kernel_size=3, stride=1, padding=1),
             nn.BatchNorm2d(256),
-            nn.ReLU(),
+            nn.LeakyReLU(0.2),
             ResidualBlock(256),
             nn.Conv2d(256, 128, kernel_size=3, stride=1, padding=1),
             nn.BatchNorm2d(128),
-            nn.ReLU(),
+            nn.LeakyReLU(0.2),
             ResidualBlock(128),
-            nn.Conv2d(128, output_channels, kernel_size=3, stride=1, padding=1),
+            nn.Conv2d(128, 64, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(64),
+            nn.LeakyReLU(0.2),
+            ResidualBlock(64),
+            nn.Conv2d(64, output_channels, kernel_size=3, stride=1, padding=1),
             nn.Sigmoid()
         )
         self.decoder = nn.Sequential(
-            nn.Conv2d(output_channels, 128, kernel_size=3, stride=1, padding=1),
+            nn.Conv2d(output_channels, 64, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(64),
+            nn.LeakyReLU(0.2),
+            ResidualBlock(64),
+            nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=1),
             nn.BatchNorm2d(128),
-            nn.ReLU(),
+            nn.LeakyReLU(0.2),
             ResidualBlock(128),
             nn.Conv2d(128, 256, kernel_size=3, stride=1, padding=1),
             nn.BatchNorm2d(256),
-            nn.ReLU(),
+            nn.LeakyReLU(0.2),
             ResidualBlock(256),
             nn.Conv2d(256, 512, kernel_size=3, stride=1, padding=1),
             nn.BatchNorm2d(512),
-            nn.ReLU(),
+            nn.LeakyReLU(0.2),
             ResidualBlock(512),
             nn.Conv2d(512, 826, kernel_size=3, stride=1, padding=1)
         )
-
+        
     def forward(self, x):
         x = self.encoder(x)
         x = self.decoder(x)

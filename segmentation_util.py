@@ -129,16 +129,18 @@ def predict(model, data, device, with_sigmoid=True):
         prediction = (prediction > 0.5).float()
     return prediction.squeeze(1)
 
-def show_overlay(model, data, device, with_sigmoid=True):
+def show_overlay(model, data, device, with_sigmoid=True, title=None):
     prediction = predict(model, data[0], device, with_sigmoid=with_sigmoid)
     image = data[2]
     overlay = np.zeros_like(image)
     overlay[prediction.cpu().numpy().squeeze(0) == 1] = [0, 255, 0]
     combined = cv2.addWeighted(image, 0.7, overlay, 0.3, 0)
-    
+
     plt.figure(figsize=(10, 10))
     plt.imshow(combined)
     plt.axis('off')  # Turn off axis numbers and ticks
+    if title:
+        plt.suptitle(title)
     plt.show()
 
 def show_training_step(output, image):

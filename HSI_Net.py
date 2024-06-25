@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import segmentation_models_pytorch as smp
+import numpy as np
 
 class HyperspectralToGrayscale(nn.Module):
     def __init__(self):
@@ -112,3 +113,28 @@ def _pad_input(x):
 def _crop_output(x, original_size):
     # Crop to the original size
     return x[:, :, :original_size[0], :original_size[1]]
+
+class UnetWithWindowing(nn.Module):
+    def __init__(self, pretrained_unet, window):
+        super(UnetWithWindowing, self).__init__()
+        self.pretrained_unet = pretrained_unet
+        self.window = window
+
+    def forward(self, hsi_image):
+        # Apply windowing
+        hsi_image_windowed = hsi_image[:, self.window[0]:self.window[1], :, :]
+        
+        # Calculate median along the windowed dimension
+        hsi_image_median = torch.median(hsi_image_windowed, dim=1).values
+        
+        # Normalize the image
+        hsi_image_min = hsi_image_median.min(dim=1, keepdim=True).values.min(dim=2, keepdim=True).values
+        hsi_image_max = hsi_image_median.max(dim=1, keepdim=True).values.max(dim=2, keepdim=True).values
+        hsi_image_normalized = (hsi_image_median - hsi_image_min) / (hsi_image_max - hsi_image_min)
+        
+        # Add channel dimension
+        hsi_image_normalized = hsi_image_normalized.unsqueeze(1)
+        
+        # Forward pass through the U-Net model
+        output = self.pretrained_unet(hsi_image_normalized)
+        return output

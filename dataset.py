@@ -127,6 +127,22 @@ class HSIDataset(Dataset):
 
         return hsi_image, label, img
     
+    def get_window_from_wavelengths(self, wavelengths):
+        """
+        Get the window indices corresponding to the given wavelengths.
+        Args:
+        wavelengths (tuple): The start and end wavelengths of the window.
+        
+        Returns:
+        tuple: The start and end indices of the window.
+        """
+        img = spectral.open_image(self.data_paths[0][0])
+        wavelength_array = np.array(img.metadata['wavelength']).astype(float)
+        indices = np.where((wavelength_array >= wavelengths[0]) & (wavelength_array <= wavelengths[1]))[0]
+        start_idx, end_idx = indices[0], indices[-1]
+        return (start_idx, end_idx)
+        
+    
     def get_mean_std(self):
         """
         Compute the mean and standard deviation of the dataset.

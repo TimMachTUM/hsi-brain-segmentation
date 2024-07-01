@@ -4,6 +4,7 @@ import wandb
 import numpy as np
 import cv2
 import matplotlib.pyplot as plt
+from dataset import build_dataloaders
 
 def train_and_validate(model, trainloader, validationloader, criterion, optimizer, epochs=10, model_name=None, device='cuda', batch_print=10):
     """
@@ -105,7 +106,7 @@ def evaluate_model(model, dataloader, device, with_wandb=True):
     if with_wandb:
         wandb.log({"test/precision": precision, "test/recall": recall, "test/f1_score": f1_score, "test/accuracy": accuracy, "test/dice_score": dice_score})
     print(f'Precision: {precision:.4f}, Recall: {recall:.4f}, F1 Score: {f1_score:.4f}, Dice Score: {dice_score:.4f}, Accuracy: {accuracy:.4f}')
-
+    return precision, recall, f1_score, accuracy, dice_score
 
 def model_pipeline(model, trainloader, validationloader, testloader, criterion, optimizer, config, project, epochs=10, model_name=None, device='cuda', batch_print=10, evaluate=True):
     with wandb.init(project=project, config=config, name=model_name):
@@ -117,6 +118,7 @@ def model_pipeline(model, trainloader, validationloader, testloader, criterion, 
                 model.load_state_dict(torch.load(f'./models/{model_name}.pth'))
             evaluate_model(model, testloader, device)
         return model, train_loss, val_loss
+    
 
 def predict(model, data, device, with_sigmoid=True):
     model.to(device)
@@ -133,7 +135,7 @@ def show_overlay(model, data, device, with_sigmoid=True, title=None):
     prediction = predict(model, data[0], device, with_sigmoid=with_sigmoid)
     image = data[2]
     labels = data[1]
-    
+
     prediction_np = prediction.cpu().numpy().squeeze(0)
     labels_np = labels.cpu().numpy().squeeze(0)
 
@@ -167,3 +169,70 @@ def show_training_step(output, image):
     plt.imshow(combined)
     plt.axis('off')  # Turn off axis numbers and ticks
     plt.show()
+
+def train_sweep(config=None):
+    with wandb.init(config=config):
+        config = wandb.config
+        model = smp.Unet(config['encoder'], encoder_weights=None, in_channels=1, classes=1)
+
+        if config['architecture'] == 'UnetPlusPlus':
+            model = smp.UnetPlusPlus(config['encoder'], encoder_weights=None, in_channels=1, classes=1)
+        model.to(config['device'])
+
+        criterion = smp.losses.DiceLoss(mode='binary')
+        if config['loss'] == 'BCE':
+            criterion = torch.nn.BCEWithLogitsLoss()
+
+        trainloader, validationloader, testloader = build_dataloaders(batch_size=config['batch_size'], proportion_augmented_data=config['proportion_augmented_data'])
+        
+        optimizer = torch.optim.Adam(model.parameters(), lr=config['learning_rate'])
+        if config['optimizer'] == 'SGD':
+            optimizer = torch.optim.SGD(model.parameters(), lr=config['learning_rate'])
+        
+        train_losses, val_losses = [], []
+        
+        for epoch in range(config['epochs']):
+            model.train()
+            running_loss = 0.0
+            train_loss = 0.0
+            for i, data in enumerate(trainloader):
+                inputs, labels = data[0].to(config['device']), data[1].to(config['device']).float()
+                outputs = model(inputs)
+                optimizer.zero_grad()
+                loss = criterion(outputs, labels)
+                loss.backward()
+                optimizer.step()
+                running_loss += loss.item()
+                train_loss += loss.item()
+
+                if (i + 1) % 10 == 0:  # Adjust the condition based on your preference
+                    print(f'Epoch {epoch + 1}, Batch {i + 1}, Loss: {running_loss / 10:.4f}')
+                    running_loss = 0.0  # Reset running loss after printing
+                    
+            # Calculate and print the average loss per epoch
+            train_loss = train_loss / len(trainloader)
+            train_losses.append(train_loss)
+            print(f'Epoch {epoch+1}, Train Loss: {train_loss:.4f}')
+            wandb.log({"epoch":epoch+1, "train/loss": train_loss}, step=epoch+1)
+            
+            # Validation phase
+            model.eval()
+            val_running_loss = 0.0
+            with torch.no_grad():
+                for i, data in enumerate(validationloader):
+                    inputs, labels = data[0].to(config['device']), data[1].to(config['device']).float()
+                    outputs = model(inputs)
+                    
+                    loss = criterion(outputs, labels)
+                    val_running_loss += loss.item()
+            
+            val_loss = val_running_loss / len(validationloader)
+            val_losses.append(val_loss)
+
+            print(f'Epoch {epoch+1}, Validation Loss: {val_loss:.4f}')
+            wandb.log({"epoch":epoch+1, "validation/loss": val_loss}, step=epoch+1)
+            _,_,_,_, dice_score = evaluate_model(model, testloader, config['device'], with_wandb=False)
+            wandb.log({"epoch":epoch+1, "dice_score": dice_score}, step=epoch+1)
+        
+        del model
+        torch.cuda.empty_cache()

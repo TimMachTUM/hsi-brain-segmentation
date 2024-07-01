@@ -7,6 +7,11 @@ import spectral
 import numpy as np
 import cv2
 import random
+from torch.utils.data import DataLoader, random_split, ConcatDataset, Subset
+import os
+from torchvision.transforms import Compose, ToTensor, Grayscale, Resize, v2, Normalize
+import torch
+import numpy as np
 
 class SegmentationDataset(Dataset):
     def __init__(self, image_dir, label_dir, image_transform=None, label_transform=None, augmentation=None):
@@ -288,3 +293,91 @@ class SegmentationDatasetWithRandomCrops(Dataset):
         center_cropped_mask = mask[center_y:center_y+crop_height, center_x:center_x+crop_width]
         
         return center_cropped_image, center_cropped_mask
+    
+
+def build_dataloaders(batch_size=8, proportion_augmented_data=0.1):
+    train_image_path = './FIVES/train/Original'
+    train_label_path = './FIVES/train/GroundTruth'
+    test_image_path = './FIVES/test/Original'
+    test_label_path = './FIVES/test/GroundTruth'
+    np.random.seed(42)
+
+    # Define transformations for images
+    width, height = 512, 512
+    image_transform = Compose([
+        Grayscale(num_output_channels=1),  # Convert the image to grayscale
+        Resize((width, height)),                # Resize images to 512x512
+        ToTensor(),                         # Convert the image to a PyTorch tensor
+        Normalize(mean=[0.2147], std=[0.1163])   # Normalize the grayscale image
+        # Normalize(mean=[0.3728, 0.1666, 0.0678], std=[0.1924, 0.0956, 0.0395])
+    ])
+
+    # Define transformations for labels, if needed
+    label_transform = Compose([
+        Resize((width, height)),  # Resize labels to 512x512
+        ToTensor()           # Convert label to a tensor
+    ])
+
+    augmentation = v2.RandomApply([
+        v2.RandomHorizontalFlip(p=0.5),
+        v2.RandomVerticalFlip(p=0.5),
+        v2.RandomRotation(degrees=90),
+        v2.RandomAffine(degrees=0, translate=(0.1, 0.1), scale=(0.9, 1.1)),
+    ])
+
+    random_crop_image_transform = Compose([
+        Grayscale(num_output_channels=1),
+        ToTensor()
+    ])
+    random_crop_label_transform = Compose([ToTensor()])
+
+    random_crop_dataset = SegmentationDatasetWithRandomCrops(
+        train_image_path, 
+        train_label_path, 
+        random_crop_image_transform, 
+        random_crop_label_transform,
+        crop_width=width,
+        crop_height=height)
+
+    dataset = SegmentationDataset(
+        train_image_path, 
+        train_label_path, 
+        image_transform, 
+        label_transform,
+    )
+
+    testset = SegmentationDataset(
+        test_image_path, 
+        test_label_path, 
+        image_transform, 
+        label_transform
+    )
+
+    augmented_dataset = SegmentationDataset(
+        train_image_path, 
+        train_label_path, 
+        image_transform, 
+        label_transform,
+        augmentation
+    )
+
+    # Prepare DataLoader
+    train_size = int(0.9 * len(dataset))
+    train_indices = np.random.choice(len(dataset), train_size, replace=False)
+    val_indices = np.setdiff1d(np.arange(len(dataset)), train_indices)
+
+    train_dataset = Subset(dataset, train_indices)
+    val_dataset = Subset(dataset, val_indices)
+
+    augmented_dataset = Subset(augmented_dataset, train_indices[:int(proportion_augmented_data * len(train_indices))])
+    random_crop_dataset = Subset(random_crop_dataset, train_indices[:int(proportion_augmented_data * len(train_indices))])
+
+    train_dataset = ConcatDataset([train_dataset, random_crop_dataset, augmented_dataset])
+    print(f'Number of samples in the training set: {len(train_dataset)}, validation set: {len(val_dataset)}')
+    print(f'Number of samples in the test set: {len(testset)}')
+
+    trainloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=8)
+    validationloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=8)
+    testloader = DataLoader(testset, batch_size=batch_size, shuffle=False, num_workers=8)
+
+    return trainloader, validationloader, testloader

@@ -126,14 +126,24 @@ def predict(model, data, device, with_sigmoid=True):
         prediction = model(data)
         if with_sigmoid:
             prediction = torch.sigmoid(prediction)
-        prediction = (prediction > 0.5).float()
+        prediction = (prediction > 0.9).float()
     return prediction.squeeze(1)
 
 def show_overlay(model, data, device, with_sigmoid=True, title=None):
     prediction = predict(model, data[0], device, with_sigmoid=with_sigmoid)
     image = data[2]
+    labels = data[1]
+    
+    prediction_np = prediction.cpu().numpy().squeeze(0)
+    labels_np = labels.cpu().numpy().squeeze(0)
+
     overlay = np.zeros_like(image)
-    overlay[prediction.cpu().numpy().squeeze(0) == 1] = [0, 255, 0]
+    # Green for prediction
+    overlay[prediction_np == 1] = [0, 255, 0]
+    # Blue for ground truth
+    overlay[labels_np == 1] = [0, 0, 255]
+    # Cyan for intersection (both prediction and ground truth are 1)
+    overlay[(prediction_np == 1) & (labels_np == 1)] = [0, 255, 255]
     combined = cv2.addWeighted(image, 0.7, overlay, 0.3, 0)
 
     plt.figure(figsize=(10, 10))

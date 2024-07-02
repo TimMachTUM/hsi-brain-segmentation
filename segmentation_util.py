@@ -111,7 +111,6 @@ def evaluate_model(model, dataloader, device, with_wandb=True):
 def model_pipeline(model, trainloader, validationloader, testloader, criterion, optimizer, config, project, epochs=10, model_name=None, device='cuda', batch_print=10, evaluate=True):
     with wandb.init(project=project, config=config, name=model_name):
         config = wandb.config
-        model = model.to(device)
         train_loss, val_loss = train_and_validate(model, trainloader, validationloader, criterion, optimizer, epochs, model_name, device, batch_print)
         if evaluate:
             if model_name:
@@ -170,33 +169,61 @@ def show_training_step(output, image):
     plt.axis('off')  # Turn off axis numbers and ticks
     plt.show()
 
+def build_segmentation_model(encoder, architecture='Unet', device='cuda'):
+    if architecture == 'Unet':
+        model = smp.Unet(encoder, encoder_weights=None, in_channels=1, classes=1)
+    elif architecture == 'UnetPlusPlus':
+        model = smp.UnetPlusPlus(encoder, encoder_weights=None, in_channels=1, classes=1)
+    elif architecture == 'MAnet':
+        model = smp.FPN(encoder, encoder_weights=None, in_channels=1, classes=1)
+    elif architecture == 'Linknet':
+        model = smp.Linknet(encoder, encoder_weights=None, in_channels=1, classes=1)
+    elif architecture == 'FPN':
+        model = smp.FPN(encoder, encoder_weights=None, in_channels=1, classes=1)
+    elif architecture == 'PSPNet':
+        model = smp.PSPNet(encoder, encoder_weights=None, in_channels=1, classes=1)
+    elif architecture == 'DeepLabV3Plus':
+        model = smp.DeepLabV3Plus(encoder, encoder_weights=None, in_channels=1, classes=1)
+    elif architecture == 'PAN':
+        model = smp.PAN(encoder, encoder_weights=None, in_channels=1, classes=1)
+    return model.to(device)
+
+def build_criterion(loss='Dice'):
+    if loss == 'Dice':
+        return smp.losses.DiceLoss(mode='binary')
+    return torch.nn.BCEWithLogitsLoss()
+
+def build_optimizer(model, learning_rate=0.001, optimizer='Adam'):
+    if optimizer == 'Adam':
+        return torch.optim.Adam(model.parameters(), lr=learning_rate)
+    return torch.optim.SGD(model.parameters(), lr=learning_rate)
+
 def train_sweep(config=None):
     with wandb.init(config=config):
         config = wandb.config
-        model = smp.Unet(config['encoder'], encoder_weights=None, in_channels=1, classes=1)
+        encoder = config['encoder']
+        device = config['device']
+        architecture = config['architecture']
+        loss = config['loss']
+        learning_rate = config['learning_rate']
+        optimizer = config['optimizer']
+        epochs = config['epochs']
+        batch_size = config['batch_size']
+        proportion_augmented_data = config['proportion_augmented_data']
 
-        if config['architecture'] == 'UnetPlusPlus':
-            model = smp.UnetPlusPlus(config['encoder'], encoder_weights=None, in_channels=1, classes=1)
-        model.to(config['device'])
-
-        criterion = smp.losses.DiceLoss(mode='binary')
-        if config['loss'] == 'BCE':
-            criterion = torch.nn.BCEWithLogitsLoss()
-
-        trainloader, validationloader, testloader = build_dataloaders(batch_size=config['batch_size'], proportion_augmented_data=config['proportion_augmented_data'])
-        
-        optimizer = torch.optim.Adam(model.parameters(), lr=config['learning_rate'])
-        if config['optimizer'] == 'SGD':
-            optimizer = torch.optim.SGD(model.parameters(), lr=config['learning_rate'])
+        model = build_segmentation_model(encoder, architecture=architecture, device=device)
+        criterion = build_criterion(loss)
+        optimizer = build_optimizer(model, learning_rate=learning_rate, optimizer=optimizer)
+        trainloader, validationloader, testloader = build_dataloaders(batch_size=batch_size, proportion_augmented_data=proportion_augmented_data)
         
         train_losses, val_losses = [], []
         
-        for epoch in range(config['epochs']):
+        for epoch in range(epochs):
             model.train()
             running_loss = 0.0
             train_loss = 0.0
             for i, data in enumerate(trainloader):
-                inputs, labels = data[0].to(config['device']), data[1].to(config['device']).float()
+                inputs, labels = data[0].to(device), data[1].to(device).float()
                 outputs = model(inputs)
                 optimizer.zero_grad()
                 loss = criterion(outputs, labels)
@@ -220,7 +247,7 @@ def train_sweep(config=None):
             val_running_loss = 0.0
             with torch.no_grad():
                 for i, data in enumerate(validationloader):
-                    inputs, labels = data[0].to(config['device']), data[1].to(config['device']).float()
+                    inputs, labels = data[0].to(device), data[1].to(device).float()
                     outputs = model(inputs)
                     
                     loss = criterion(outputs, labels)
@@ -231,7 +258,7 @@ def train_sweep(config=None):
 
             print(f'Epoch {epoch+1}, Validation Loss: {val_loss:.4f}')
             wandb.log({"epoch":epoch+1, "validation/loss": val_loss}, step=epoch+1)
-            _,_,_,_, dice_score = evaluate_model(model, testloader, config['device'], with_wandb=False)
+            _,_,_,_, dice_score = evaluate_model(model, testloader, device, with_wandb=False)
             wandb.log({"epoch":epoch+1, "dice_score": dice_score}, step=epoch+1)
         
         del model

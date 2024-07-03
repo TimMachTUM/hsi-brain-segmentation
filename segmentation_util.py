@@ -19,7 +19,7 @@ def train_and_validate(model, trainloader, validationloader, criterion, optimize
         train_losses, val_losses: List of losses per epoch
     """
     train_losses, val_losses = [], []
-    min_val_loss = np.inf
+    highest_dice = 0
     wandb.watch(model, criterion, log="all", log_freq=10)
     
     for epoch in range(epochs):
@@ -60,9 +60,10 @@ def train_and_validate(model, trainloader, validationloader, criterion, optimize
         val_loss = val_running_loss / len(validationloader)
         val_losses.append(val_loss)
 
+        _,_,_,_, dice_score = evaluate_model(model, validationloader, device, with_wandb=False)
         if model_name:
-            if val_loss < min_val_loss:
-                min_val_loss = val_loss
+            if dice_score > highest_dice:
+                highest_dice = dice_score
                 torch.save(model.state_dict(), f'./models/{model_name}.pth')
                 model_artifact = wandb.Artifact(f"{model_name}", type="model")
                 model_artifact.add_file(f'./models/{model_name}.pth')

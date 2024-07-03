@@ -114,9 +114,9 @@ def _crop_output(x, original_size):
     # Crop to the original size
     return x[:, :, :original_size[0], :original_size[1]]
 
-class UnetWithWindowing(nn.Module):
+class SegmentationModelWithWindowing(nn.Module):
     def __init__(self, pretrained_unet, window):
-        super(UnetWithWindowing, self).__init__()
+        super(SegmentationModelWithWindowing, self).__init__()
         self.pretrained_unet = pretrained_unet
         self.window = window
 

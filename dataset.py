@@ -295,7 +295,7 @@ class SegmentationDatasetWithRandomCrops(Dataset):
         return center_cropped_image, center_cropped_mask
     
 
-def build_dataloaders(batch_size=8, proportion_augmented_data=0.1):
+def build_dataloaders(batch_size=8, proportion_augmented_data=0.1, num_channels=1):
     train_image_path = './FIVES/train/Original'
     train_label_path = './FIVES/train/GroundTruth'
     test_image_path = './FIVES/test/Original'
@@ -304,12 +304,12 @@ def build_dataloaders(batch_size=8, proportion_augmented_data=0.1):
 
     # Define transformations for images
     width, height = 512, 512
+    normalization = Normalize(mean=[0.3728, 0.1666, 0.0678], std=[0.1924, 0.0956, 0.0395]) if num_channels == 3 else Normalize(mean=[0.2147], std=[0.1163])
     image_transform = Compose([
-        Grayscale(num_output_channels=1),  # Convert the image to grayscale
+        Grayscale(num_output_channels=num_channels),  # Convert the image to grayscale
         Resize((width, height)),                # Resize images to 512x512
         ToTensor(),                         # Convert the image to a PyTorch tensor
-        Normalize(mean=[0.2147], std=[0.1163])   # Normalize the grayscale image
-        # Normalize(mean=[0.3728, 0.1666, 0.0678], std=[0.1924, 0.0956, 0.0395])
+        normalization
     ])
 
     # Define transformations for labels, if needed
@@ -326,7 +326,7 @@ def build_dataloaders(batch_size=8, proportion_augmented_data=0.1):
     ])
 
     random_crop_image_transform = Compose([
-        Grayscale(num_output_channels=1),
+        Grayscale(num_output_channels=num_channels),
         ToTensor()
     ])
     random_crop_label_transform = Compose([ToTensor()])

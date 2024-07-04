@@ -19,7 +19,7 @@ def train_and_validate(model, trainloader, validationloader, criterion, optimize
         train_losses, val_losses: List of losses per epoch
     """
     train_losses, val_losses = [], []
-    highest_precision = 0
+    highest_dice = 0
     wandb.watch(model, criterion, log="all", log_freq=10)
     
     for epoch in range(epochs):
@@ -62,15 +62,17 @@ def train_and_validate(model, trainloader, validationloader, criterion, optimize
 
         precision,_,_,_, dice_score = evaluate_model(model, validationloader, device, with_wandb=False)
         if model_name:
-            if precision > highest_precision:
-                highest_precision = precision
+            if dice_score > highest_dice:
+                highest_dice = dice_score
                 torch.save(model.state_dict(), f'./models/{model_name}.pth')
                 model_artifact = wandb.Artifact(f"{model_name}", type="model")
                 model_artifact.add_file(f'./models/{model_name}.pth')
                 wandb.log_artifact(model_artifact)
-
+        
         print(f'Epoch {epoch+1}, Validation Loss: {val_loss:.4f}')
         wandb.log({"epoch":epoch+1, "validation/loss": val_loss}, step=epoch+1)
+        wandb.log({"epoch":epoch+1, "precision": precision}, step=epoch+1)
+        wandb.log({"epoch":epoch+1, "dice_score": dice_score}, step=epoch+1)
     
     return train_losses, val_losses
 
@@ -170,23 +172,23 @@ def show_training_step(output, image):
     plt.axis('off')  # Turn off axis numbers and ticks
     plt.show()
 
-def build_segmentation_model(encoder, architecture='Unet', device='cuda'):
+def build_segmentation_model(encoder, architecture='Unet', device='cuda', in_channels=1):
     if architecture == 'Unet':
-        model = smp.Unet(encoder, encoder_weights=None, in_channels=1, classes=1)
+        model = smp.Unet(encoder, encoder_weights=None, in_channels=in_channels, classes=1)
     elif architecture == 'UnetPlusPlus':
-        model = smp.UnetPlusPlus(encoder, encoder_weights=None, in_channels=1, classes=1)
+        model = smp.UnetPlusPlus(encoder, encoder_weights=None, in_channels=in_channels, classes=1)
     elif architecture == 'MAnet':
-        model = smp.FPN(encoder, encoder_weights=None, in_channels=1, classes=1)
+        model = smp.FPN(encoder, encoder_weights=None, in_channels=in_channels, classes=1)
     elif architecture == 'Linknet':
-        model = smp.Linknet(encoder, encoder_weights=None, in_channels=1, classes=1)
+        model = smp.Linknet(encoder, encoder_weights=None, in_channels=in_channels, classes=1)
     elif architecture == 'FPN':
-        model = smp.FPN(encoder, encoder_weights=None, in_channels=1, classes=1)
+        model = smp.FPN(encoder, encoder_weights=None, in_channels=in_channels, classes=1)
     elif architecture == 'PSPNet':
-        model = smp.PSPNet(encoder, encoder_weights=None, in_channels=1, classes=1)
+        model = smp.PSPNet(encoder, encoder_weights=None, in_channels=in_channels, classes=1)
     elif architecture == 'DeepLabV3Plus':
-        model = smp.DeepLabV3Plus(encoder, encoder_weights=None, in_channels=1, classes=1)
+        model = smp.DeepLabV3Plus(encoder, encoder_weights=None, in_channels=in_channels, classes=1)
     elif architecture == 'PAN':
-        model = smp.PAN(encoder, encoder_weights=None, in_channels=1, classes=1)
+        model = smp.PAN(encoder, encoder_weights=None, in_channels=in_channels, classes=1)
     return model.to(device)
 
 def build_criterion(loss='Dice'):
@@ -210,12 +212,13 @@ def train_sweep(config=None):
         optimizer = config['optimizer']
         epochs = config['epochs']
         batch_size = config['batch_size']
+        channels = config['channels']
         proportion_augmented_data = config['proportion_augmented_data']
 
-        model = build_segmentation_model(encoder, architecture=architecture, device=device)
+        model = build_segmentation_model(encoder, architecture=architecture, device=device, in_channels=channels)
         criterion = build_criterion(loss)
         optimizer = build_optimizer(model, learning_rate=learning_rate, optimizer=optimizer)
-        trainloader, validationloader, testloader = build_dataloaders(batch_size=batch_size, proportion_augmented_data=proportion_augmented_data)
+        trainloader, validationloader, testloader = build_dataloaders(batch_size=batch_size, proportion_augmented_data=proportion_augmented_data, num_channels=channels)
         
         train_losses, val_losses = [], []
         

@@ -3,20 +3,20 @@ import torch
 from segmentation_util import train_sweep
 import sys
 
-log_file = open('./out/hyperparameter_logs.txt', 'w')
+log_file = open('./out/hyperparameter_logs_3-channels.txt', 'w')
 sys.stdout = log_file
 wandb.login()
 
 sweep_config = {
-    'name': 'Fundus-Segmentation-Sweep',
+    'name': 'Fundus-Segmentation-Sweep-3-channels',
     'method': 'bayes',
     'parameters': {
         'encoder': {
-            'values': ['resnet152', 'resnext101_32x8d', 'timm-resnest269e', 'timm-regnetx_320', 'timm-regnety_320', 'senet154']
+            'values': ['timm-resnest269e', 'timm-regnetx_320', 'timm-regnety_320', 'senet154']
         },
         'learning_rate': {
-            "min": 0.00001, 
-            "max": 0.1
+            "min": 0.001, 
+            "max": 0.04
         },
         'epochs': {
             'value': 10
@@ -25,17 +25,20 @@ sweep_config = {
             'values': ['Dice', 'BCE']
         },
         'optimizer': {
-            'values': ['Adam', 'SGD']
+            'value': 'Adam'
         },
         'batch_size': {
             'value': 8
         },
         'proportion_augmented_data': {
-            'values': [0.1, 0.2, 0.3]
+            'value': 0.1
         },
         'architecture': {
-            'values': ['Unet', 'UnetPlusPlus']
-        }
+            'values': ['UnetPlusPlus', 'Linknet', 'Unet']
+        },
+        'channels': {
+            'value': 3
+        },
     },
     'metric': {
         'name': 'dice_score',
@@ -43,9 +46,9 @@ sweep_config = {
     }
 }
 
-sweep_config['parameters']['device'] = {'value':'cuda:0' if torch.cuda.is_available() else 'cpu'}
+sweep_config['parameters']['device'] = {'value':'cuda:2' if torch.cuda.is_available() else 'cpu'}
 sweep_id = wandb.sweep(sweep_config, project='fundus-segmentation')
-wandb.agent(sweep_id, function=train_sweep, count=10)
+wandb.agent(sweep_id, function=train_sweep, count=20)
 
 sys.stdout = sys.__stdout__
 log_file.close()

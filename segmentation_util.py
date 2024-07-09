@@ -124,7 +124,7 @@ def model_pipeline(model, trainloader, validationloader, testloader, criterion, 
         return model, train_loss, val_loss
     
 
-def predict(model, data, device, with_sigmoid=True):
+def predict(model, data, device, with_sigmoid=True, threshold=0.5):
     model.to(device)
     model.eval()
     data = data.unsqueeze(0).to(device)
@@ -132,11 +132,11 @@ def predict(model, data, device, with_sigmoid=True):
         prediction = model(data)
         if with_sigmoid:
             prediction = torch.sigmoid(prediction)
-        prediction = (prediction > 0.9).float()
+        prediction = (prediction > threshold).float()
     return prediction.squeeze(1)
 
-def show_overlay(model, data, device, with_sigmoid=True, title=None, with_precision=False, with_postprocessing=False):
-    prediction = predict(model, data[0], device, with_sigmoid=with_sigmoid)
+def show_overlay(model, data, device, with_sigmoid=True, title=None, with_precision=True, with_postprocessing=True, threshold=0.5):
+    prediction = predict(model, data[0], device, with_sigmoid=with_sigmoid, threshold=threshold)
     image = data[2]
     labels = data[1]
 
@@ -211,7 +211,7 @@ def build_criterion(loss='Dice'):
     elif loss == 'BCE':
         return torch.nn.BCEWithLogitsLoss()
     elif loss == 'Focal':
-        return smp.losses.FocalLoss(mode='binary', alpha=1, gamma=2)
+        return smp.losses.FocalLoss(mode='binary', gamma=2)
 
 def build_optimizer(model, learning_rate=0.001, optimizer='Adam'):
     if optimizer == 'Adam':

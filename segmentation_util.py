@@ -5,6 +5,8 @@ import numpy as np
 import cv2
 import matplotlib.pyplot as plt
 from dataset import build_dataloaders
+from sklearn.metrics import precision_score
+import cv2
 
 def train_and_validate(model, trainloader, validationloader, criterion, optimizer, epochs=10, model_name=None, device='cuda', batch_print=10):
     """
@@ -133,12 +135,17 @@ def predict(model, data, device, with_sigmoid=True):
         prediction = (prediction > 0.9).float()
     return prediction.squeeze(1)
 
-def show_overlay(model, data, device, with_sigmoid=True, title=None):
+def show_overlay(model, data, device, with_sigmoid=True, title=None, with_precision=False, with_postprocessing=False):
     prediction = predict(model, data[0], device, with_sigmoid=with_sigmoid)
     image = data[2]
     labels = data[1]
 
     prediction_np = prediction.cpu().numpy().squeeze(0)
+
+    if with_postprocessing:
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        prediction_np = cv2.morphologyEx(prediction_np, cv2.MORPH_OPEN, kernel)
+        
     labels_np = labels.cpu().numpy().squeeze(0)
 
     overlay = np.zeros_like(image)
@@ -149,6 +156,13 @@ def show_overlay(model, data, device, with_sigmoid=True, title=None):
     # Cyan for intersection (both prediction and ground truth are 1)
     overlay[(prediction_np == 1) & (labels_np == 1)] = [0, 255, 255]
     combined = cv2.addWeighted(image, 0.7, overlay, 0.3, 0)
+
+    if with_precision:
+        precision = precision_score(labels_np.flatten(), prediction_np.flatten())
+        if title:
+            title += f' - Precision: {precision:.2f}'
+        else:
+            title = f'Precision: {precision:.2f}'
 
     plt.figure(figsize=(10, 10))
     plt.imshow(combined)
@@ -194,7 +208,10 @@ def build_segmentation_model(encoder, architecture='Unet', device='cuda', in_cha
 def build_criterion(loss='Dice'):
     if loss == 'Dice':
         return smp.losses.DiceLoss(mode='binary')
-    return torch.nn.BCEWithLogitsLoss()
+    elif loss == 'BCE':
+        return torch.nn.BCEWithLogitsLoss()
+    elif loss == 'Focal':
+        return smp.losses.FocalLoss(mode='binary', alpha=1, gamma=2)
 
 def build_optimizer(model, learning_rate=0.001, optimizer='Adam'):
     if optimizer == 'Adam':

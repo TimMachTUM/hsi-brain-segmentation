@@ -205,13 +205,13 @@ def build_segmentation_model(encoder, architecture='Unet', device='cuda', in_cha
         model = smp.PAN(encoder, encoder_weights=None, in_channels=in_channels, classes=1)
     return model.to(device)
 
-def build_criterion(loss='Dice'):
+def build_criterion(loss='Dice', gamma=2):
     if loss == 'Dice':
         return smp.losses.DiceLoss(mode='binary')
     elif loss == 'BCE':
         return torch.nn.BCEWithLogitsLoss()
     elif loss == 'Focal':
-        return smp.losses.FocalLoss(mode='binary', gamma=2)
+        return smp.losses.FocalLoss(mode='binary', gamma=gamma)
 
 def build_optimizer(model, learning_rate=0.001, optimizer='Adam'):
     if optimizer == 'Adam':
@@ -231,9 +231,11 @@ def train_sweep(config=None):
         batch_size = config['batch_size']
         channels = config['channels']
         proportion_augmented_data = config['proportion_augmented_data']
+        if 'gamma' in config:
+            gamma = config['gamma']
 
         model = build_segmentation_model(encoder, architecture=architecture, device=device, in_channels=channels)
-        criterion = build_criterion(loss)
+        criterion = build_criterion(loss, gamma=gamma if 'gamma' in config else 2)
         optimizer = build_optimizer(model, learning_rate=learning_rate, optimizer=optimizer)
         trainloader, validationloader, testloader = build_dataloaders(batch_size=batch_size, proportion_augmented_data=proportion_augmented_data, num_channels=channels)
         

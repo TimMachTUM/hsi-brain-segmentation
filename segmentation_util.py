@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 from dataset import build_dataloaders
 from sklearn.metrics import precision_score
 import cv2
+from ipywidgets import interact, FloatSlider, fixed
 
 def train_and_validate(model, trainloader, validationloader, criterion, optimizer, epochs=10, model_name=None, device='cuda', batch_print=10):
     """
@@ -83,7 +84,7 @@ def dice_coefficient(pred, target):
     intersection = (pred * target).sum()
     return (2. * intersection + smooth) / (pred.sum() + target.sum() + smooth)
 
-def evaluate_model(model, dataloader, device, with_wandb=True):
+def evaluate_model(model, dataloader, device, with_wandb=True, threshold=0.5):
     model.eval()
     recall = 0
     precision = 0
@@ -95,7 +96,7 @@ def evaluate_model(model, dataloader, device, with_wandb=True):
         for i, data in enumerate(dataloader):
             inputs, labels = data[0].to(device), data[1].to(device).int()
             outputs = model(inputs)
-            tp, fp, fn, tn = smp.metrics.get_stats(outputs, labels, mode='binary', threshold=0.5)
+            tp, fp, fn, tn = smp.metrics.get_stats(outputs, labels, mode='binary', threshold=threshold)
             recall += smp.metrics.recall(tp, fp, fn, tn, reduction='micro')
             precision += smp.metrics.precision(tp, fp, fn, tn, reduction='micro')
             f1_score += smp.metrics.f1_score(tp, fp, fn, tn, reduction='micro')
@@ -142,6 +143,33 @@ def show_overlay(model, data, device, with_sigmoid=True, title=None, with_precis
 
     prediction_np = prediction.cpu().numpy().squeeze(0)
 
+    _plot_overlay(title, with_precision, with_postprocessing, image, labels, prediction_np)
+
+def show_interactive_overlay(model, data, device, title):
+    image = data[2]
+    labels = data[1]
+    model.to(device)
+    model.eval()
+    data = data[0].unsqueeze(0).to(device)
+
+    with torch.no_grad():
+        prediction = model(data)
+
+    def apply_slider(threshold, prediction, title, with_sigmoid=True, with_postprocessing=True, with_precision=True):
+        with torch.no_grad():
+            if with_sigmoid:
+                prediction = torch.sigmoid(prediction)
+            prediction = (prediction > threshold).float()
+        prediction = prediction.squeeze(1)
+
+        prediction_np = prediction.cpu().numpy().squeeze(0)
+        _plot_overlay(title, with_precision, with_postprocessing, image, labels, prediction_np)
+
+    threshold_slider = FloatSlider(value=0.5, min=0.0, max=1.0, step=0.01, description='Threshold:', readout_format='.2f')
+    interact(apply_slider, threshold=threshold_slider, prediction=fixed(prediction), title=title)
+
+
+def _plot_overlay(title, with_precision, with_postprocessing, image, labels, prediction_np):
     if with_postprocessing:
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
         prediction_np = cv2.morphologyEx(prediction_np, cv2.MORPH_OPEN, kernel)
@@ -170,6 +198,7 @@ def show_overlay(model, data, device, with_sigmoid=True, title=None, with_precis
     if title:
         plt.suptitle(title)
     plt.show()
+
 
 def show_training_step(output, image):
     prediction = torch.sigmoid(output)

@@ -12,6 +12,7 @@ import os
 from torchvision.transforms import Compose, ToTensor, Grayscale, Resize, v2, Normalize
 import torch
 import numpy as np
+import matplotlib.pyplot as plt
 
 class SegmentationDataset(Dataset):
     def __init__(self, image_dir, label_dir, image_transform=None, label_transform=None, augmentation=None):
@@ -54,7 +55,7 @@ class SegmentationDataset(Dataset):
 
 
 class HSIDataset(Dataset):
-    def __init__(self, root_dir, image_transform=None, window=None):
+    def __init__(self, root_dir, image_transform=None, window=None, with_gt=False):
         """
         Initialize the dataset with the path to the data.
         Args:
@@ -64,6 +65,7 @@ class HSIDataset(Dataset):
         self.data_paths = []  # To store paths of the hyperspectral images and labels
         self.image_transform = image_transform
         self.window = window
+        self.with_gt = with_gt
 
         # Iterate through each subdirectory in the root directory
         for subdir in os.listdir(root_dir):
@@ -71,6 +73,8 @@ class HSIDataset(Dataset):
             if os.path.isdir(subdir_path):
                 raw_path = os.path.join(subdir_path, 'raw.hdr')
                 gt_path = os.path.join(subdir_path, 'gtMap.hdr')
+                if with_gt:
+                    gt_path = os.path.join(subdir_path, 'gtMap.png')
                 img_path = os.path.join(subdir_path, 'image.jpg')
                 dark_path = os.path.join(subdir_path, 'darkReference.hdr')
                 white_path = os.path.join(subdir_path, 'whiteReference.hdr')
@@ -104,17 +108,24 @@ class HSIDataset(Dataset):
 
         dark_full = np.tile(dark_reference, (hsi_image.shape[0], 1, 1))
         white_full = np.tile(white_reference, (hsi_image.shape[0], 1, 1))
-
-        label = spectral.open_image(gt_path).load()
+        
+        if self.with_gt:
+            label = Image.open(gt_path).convert("L")
+            label = (np.array(label) >= 128).astype(int)
+            transform = transforms.ToTensor()
+            label = transform(label)
+        else:
+            label = spectral.open_image(gt_path).load()
+            label = (label.transpose(2,0,1) == 3).astype(int)
+            label = torch.tensor(label, dtype=torch.int8)
+            
+            
         img = cv2.imread(img_path, cv2.IMREAD_UNCHANGED)
         img = img[:,:,[2,1,0]]
 
         hsi_image = (hsi_image - dark_full) / (white_full - dark_full)
         hsi_image[hsi_image <= 0] = 10**-2
         hsi_image = hsi_image.transpose(2,0,1)
-        label = (label.transpose(2,0,1) == 3).astype(int)
-
-
 
         if self.window is not None:
             hsi_image_median = np.median(hsi_image[self.window[0]:self.window[1], :, :], axis=0)
@@ -123,7 +134,6 @@ class HSIDataset(Dataset):
 
         # Convert to PyTorch tensors
         hsi_image = torch.tensor(hsi_image, dtype=torch.float32)
-        label = torch.tensor(label, dtype=torch.int8)
 
         if self.image_transform and self.label_transform:
             hsi_image = self.image_transform(hsi_image)
@@ -381,3 +391,34 @@ def build_dataloaders(batch_size=8, proportion_augmented_data=0.1, num_channels=
     testloader = DataLoader(testset, batch_size=batch_size, shuffle=False, num_workers=8)
 
     return trainloader, validationloader, testloader
+
+def create_montage(dataset, num_images=10):
+    # Define the number of images you want to show in the montage
+    num_images = min(num_images, len(dataset))
+
+    fig, axes = plt.subplots(num_images, 2, figsize=(10, num_images * 5))
+    
+    for i in range(num_images):
+        sample = dataset[i]
+        image, label = sample[2], sample[1]
+        
+        # Convert image and label to numpy arrays for plotting
+        if isinstance(image, torch.Tensor):
+            image = image.numpy().transpose(1, 2, 0)
+        if isinstance(label, torch.Tensor):
+            label = label.numpy().squeeze()
+            overlay = np.zeros_like(image)
+            overlay[label == 1] = [0, 255, 0]
+        
+        # Plot the image
+        axes[i, 0].imshow(image)
+        axes[i, 0].axis('off')
+        axes[i, 0].set_title('Image {i}'.format(i=i))
+        
+        # Plot the label
+        axes[i, 1].imshow(label, cmap='gray')
+        axes[i, 1].axis('off')
+        axes[i, 1].set_title('Label')
+    
+    plt.tight_layout()
+    plt.show()

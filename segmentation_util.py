@@ -21,6 +21,7 @@ def train_and_validate(
     model_name=None,
     device="cuda",
     batch_print=10,
+    with_overlays=False,
 ):
     """
     Function to train and validate
@@ -75,8 +76,7 @@ def train_and_validate(
 
                 loss = criterion(outputs, labels)
                 val_running_loss += loss.item()
-
-                if i == 0:
+                if with_overlays and i == 0:
                     log_segmentation_example(model, data, device, epoch)
         val_loss = val_running_loss / len(validationloader)
         val_losses.append(val_loss)
@@ -215,6 +215,7 @@ def model_pipeline(
     device="cuda",
     batch_print=10,
     evaluate=True,
+    with_overlays=False,
 ):
     with wandb.init(project=project, config=config, name=model_name):
         config = wandb.config
@@ -228,6 +229,7 @@ def model_pipeline(
             model_name,
             device,
             batch_print,
+            with_overlays
         )
         if evaluate:
             if model_name:

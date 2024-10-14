@@ -60,6 +60,8 @@ class HSIDataset(Dataset):
         Initialize the dataset with the path to the data.
         Args:
         root_dir (str): Path to the directory containing subdirectories with the HSI data and labels.
+        image_transform (callable, optional): Optional transform to be applied on a sample.
+        window (tuple, optional): The start and end wavelengths of the window to use.
         """
         self.root_dir = root_dir
         self.data_paths = []  # To store paths of the hyperspectral images and labels
@@ -78,7 +80,7 @@ class HSIDataset(Dataset):
                 img_path = os.path.join(subdir_path, 'image.jpg')
                 dark_path = os.path.join(subdir_path, 'darkReference.hdr')
                 white_path = os.path.join(subdir_path, 'whiteReference.hdr')
-                
+
                 if os.path.exists(raw_path) and os.path.exists(gt_path) and os.path.exists(img_path):
                     self.data_paths.append((raw_path, gt_path, img_path, dark_path, white_path))
 
@@ -100,7 +102,7 @@ class HSIDataset(Dataset):
         tuple: (image, label) where `image` is a hyperspectral image and `label` is the corresponding ground truth map.
         """
         raw_path, gt_path, img_path, dark_path, white_path = self.data_paths[idx]
-        
+
         # Load the hyperspectral image and label
         hsi_image = spectral.open_image(raw_path).load()
         dark_reference = spectral.open_image(dark_path).load()
@@ -108,7 +110,7 @@ class HSIDataset(Dataset):
 
         dark_full = np.tile(dark_reference, (hsi_image.shape[0], 1, 1))
         white_full = np.tile(white_reference, (hsi_image.shape[0], 1, 1))
-        
+
         if self.with_gt:
             label = Image.open(gt_path).convert("L")
             label = (np.array(label) >= 128).astype(int)
@@ -118,8 +120,7 @@ class HSIDataset(Dataset):
             label = spectral.open_image(gt_path).load()
             label = (label.transpose(2,0,1) == 3).astype(int)
             label = torch.tensor(label, dtype=torch.int8)
-            
-            
+
         img = cv2.imread(img_path, cv2.IMREAD_UNCHANGED)
         img = img[:,:,[2,1,0]]
 
@@ -128,7 +129,8 @@ class HSIDataset(Dataset):
         hsi_image = hsi_image.transpose(2,0,1)
 
         if self.window is not None:
-            hsi_image_median = np.median(hsi_image[self.window[0]:self.window[1], :, :], axis=0)
+            channels = self.get_window_from_wavelengths(self.window)
+            hsi_image_median = np.median(hsi_image[channels[0]:channels[1], :, :], axis=0)
             hsi_image = (hsi_image_median - np.min(hsi_image_median)) / (np.max(hsi_image_median) - np.min(hsi_image_median))
             hsi_image = np.expand_dims(hsi_image, axis=0)
 
@@ -141,7 +143,7 @@ class HSIDataset(Dataset):
             img = self.center_crop(img, (224, 224))
 
         return hsi_image, label, img
-    
+
     def get_window_from_wavelengths(self, wavelengths):
         """
         Get the window indices corresponding to the given wavelengths.
@@ -156,8 +158,7 @@ class HSIDataset(Dataset):
         indices = np.where((wavelength_array >= wavelengths[0]) & (wavelength_array <= wavelengths[1]))[0]
         start_idx, end_idx = indices[0], indices[-1]
         return (start_idx, end_idx)
-        
-    
+
     def get_mean_std(self):
         """
         Compute the mean and standard deviation of the dataset.
@@ -166,7 +167,7 @@ class HSIDataset(Dataset):
             mean = np.load('./normalization_coefficients/mean.npy')
             std = np.load('./normalization_coefficients/std.npy')
             return mean, std
-        
+
         # Initialize variables to store the sum and sum of squares
         sum_ = 0
         sum_sq = 0
@@ -186,7 +187,7 @@ class HSIDataset(Dataset):
         np.save('./normalization_coefficients/std.npy', std)
 
         return mean, std
-    
+
     def normalize_dataset(self):
         """
         Normalize the dataset using the given mean and standard deviation.
@@ -303,9 +304,9 @@ class SegmentationDatasetWithRandomCrops(Dataset):
         center_cropped_mask = mask[center_y:center_y+crop_height, center_x:center_x+crop_width]
         
         return center_cropped_image, center_cropped_mask
-    
 
-def build_dataloaders(batch_size=8, proportion_augmented_data=0.1, num_channels=1):
+
+def build_FIVES_dataloaders(batch_size=8, proportion_augmented_data=0.1, num_channels=1, width=512, height=512):
     train_image_path = './FIVES/train/Original'
     train_label_path = './FIVES/train/GroundTruth'
     test_image_path = './FIVES/test/Original'
@@ -313,7 +314,6 @@ def build_dataloaders(batch_size=8, proportion_augmented_data=0.1, num_channels=
     np.random.seed(42)
 
     # Define transformations for images
-    width, height = 512, 512
     normalization = Normalize(mean=[0.3728, 0.1666, 0.0678], std=[0.1924, 0.0956, 0.0395]) if num_channels == 3 else Normalize(mean=[0.2147], std=[0.1163])
     image_transform = Compose([
         Grayscale(num_output_channels=num_channels),  # Convert the image to grayscale
@@ -422,3 +422,42 @@ def create_montage(dataset, num_images=10):
     
     plt.tight_layout()
     plt.show()
+
+
+def build_hsi_dataloader(train_split=0.8, val_split=0.1, test_split=0.1, batch_size=8, window=None):
+    path = '../../ivan/HELICoiD/HSI_Human_Brain_Database_IEEE_Access/'
+
+    dataset = HSIDataset(path, window=window)
+    dataset.normalize_dataset()
+
+    total_samples = len(dataset)
+
+    # Assert that the splits sum up to exactly 1
+    if not abs((train_split + val_split + test_split) - 1.0) < 1e-6:
+        raise ValueError("train_split, val_split, and test_split must sum up to 1.")
+
+    # Calculate the number of samples for each split
+    train_size = int(train_split * total_samples)
+    val_size = int(val_split * total_samples)
+    test_size = total_samples - train_size - val_size  # Ensure all samples are used
+
+    # Generate shuffled indices for the dataset
+    indices = list(range(total_samples))
+    random.shuffle(indices)
+
+    # Split the indices based on calculated sizes
+    train_indices = indices[:train_size]
+    val_indices = indices[train_size:train_size + val_size]
+    test_indices = indices[train_size + val_size:]
+
+    # Create subsets for each split
+    trainset = Subset(dataset, train_indices)
+    valset = Subset(dataset, val_indices)
+    testset = Subset(dataset, test_indices)
+
+    # Create DataLoaders for each subset
+    trainloader = DataLoader(trainset, batch_size=batch_size, shuffle=True)
+    validationloader = DataLoader(valset, batch_size=batch_size, shuffle=False)
+    testloader = DataLoader(testset, batch_size=batch_size, shuffle=False)
+
+    return trainloader, validationloader, testloader

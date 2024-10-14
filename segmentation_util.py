@@ -4,7 +4,7 @@ import wandb
 import numpy as np
 import cv2
 import matplotlib.pyplot as plt
-from dataset import build_dataloaders
+from dataset import build_FIVES_dataloaders
 from sklearn.metrics import precision_score
 import cv2
 from ipywidgets import interact, FloatSlider, fixed
@@ -266,7 +266,7 @@ def train_sweep(config=None):
         model = build_segmentation_model(encoder, architecture=architecture, device=device, in_channels=channels)
         criterion = build_criterion(loss, gamma=gamma if 'gamma' in config else 2)
         optimizer = build_optimizer(model, learning_rate=learning_rate, optimizer=optimizer)
-        trainloader, validationloader, testloader = build_dataloaders(batch_size=batch_size, proportion_augmented_data=proportion_augmented_data, num_channels=channels)
+        trainloader, validationloader, testloader = build_FIVES_dataloaders(batch_size=batch_size, proportion_augmented_data=proportion_augmented_data, num_channels=channels)
         
         train_losses, val_losses = [], []
         

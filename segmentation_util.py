@@ -76,6 +76,8 @@ def train_and_validate(
                 loss = criterion(outputs, labels)
                 val_running_loss += loss.item()
 
+                if i == 0:
+                    log_segmentation_example(model, data, device, epoch)
         val_loss = val_running_loss / len(validationloader)
         val_losses.append(val_loss)
 
@@ -96,6 +98,58 @@ def train_and_validate(
         wandb.log({"epoch": epoch + 1, "dice_score": dice_score}, step=epoch + 1)
 
     return train_losses, val_losses
+
+
+def log_segmentation_example(model, data, device, epoch):
+    inputs, labels = data[0][0], data[1][0].to(device).float()
+    prediction = predict(model, inputs, device).squeeze(0).cpu().numpy()
+
+    # Convert the labels and prediction to integer masks
+    labels = labels.cpu().numpy().squeeze()
+
+    # Assuming inputs are in a suitable format (e.g., normalized between 0 and 1 or uint8)
+    input_image = inputs.cpu().numpy().squeeze()  # Convert to HWC format
+    if input_image.shape[0] == 1:  # Grayscale (single channel)
+        input_image = np.stack(
+            [input_image, input_image, input_image], axis=-1
+        )  # Convert to 3-channel grayscale RGB
+    elif input_image.shape[0] == 3:  # RGB image
+        input_image = input_image.transpose(1, 2, 0)  # Convert to HWC format
+
+    image_min = input_image.min()
+    image_max = input_image.max()
+
+    # Apply min-max normalization to scale values to [0, 255]
+    input_image = 255 * (input_image - image_min) / (image_max - image_min)
+    input_image = input_image.astype(np.uint8)  # Convert to uint8 after scaling
+
+    # Prepare the masks for wandb logging
+    mask_data = {
+        "predictions": {
+            "mask_data": prediction,  # The predicted mask
+            "class_labels": {
+                0: "Background",
+                1: "Blood Vessel",
+            },  # Change according to your classes
+        },
+        "ground_truth": {
+            "mask_data": labels,  # The ground truth mask
+            "class_labels": {
+                0: "Background",
+                1: "Blood Vessel",
+            },  # Change according to your classes
+        },
+    }
+
+    # Log the image and masks using wandb
+    wandb.log(
+        {
+            "Validation Overlay": wandb.Image(
+                input_image, masks=mask_data, caption=f"Epoch {epoch+1}"
+            )
+        },
+        step=epoch + 1,
+    )
 
 
 def dice_coefficient(pred, target):

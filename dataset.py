@@ -55,7 +55,7 @@ class SegmentationDataset(Dataset):
 
 
 class HSIDataset(Dataset):
-    def __init__(self, root_dir, image_transform=None, window=None, with_gt=False):
+    def __init__(self, root_dir, image_transform=None, window=None, with_gt=False, exclude_labeled_data=False):
         """
         Initialize the dataset with the path to the data.
         Args:
@@ -68,9 +68,14 @@ class HSIDataset(Dataset):
         self.image_transform = image_transform
         self.window = window
         self.with_gt = with_gt
+        labeled_data = ['004-02', '012-02', '021-01', '027-02', '030-02']
+        
+        subdirs = os.listdir(root_dir)
+        if exclude_labeled_data:
+            subdirs = [subdir for subdir in subdirs if subdir not in labeled_data]
 
         # Iterate through each subdirectory in the root directory
-        for subdir in os.listdir(root_dir):
+        for subdir in subdirs:
             subdir_path = os.path.join(root_dir, subdir)
             if os.path.isdir(subdir_path):
                 raw_path = os.path.join(subdir_path, 'raw.hdr')
@@ -424,10 +429,10 @@ def create_montage(dataset, num_images=10):
     plt.show()
 
 
-def build_hsi_dataloader(train_split=0.8, val_split=0.1, test_split=0.1, batch_size=8, window=None):
+def build_hsi_dataloader(train_split=0.8, val_split=0.1, test_split=0.1, batch_size=8, window=None, exclude_labeled_data=False):
     path = '../../ivan/HELICoiD/HSI_Human_Brain_Database_IEEE_Access/'
 
-    dataset = HSIDataset(path, window=window)
+    dataset = HSIDataset(path, window=window, exclude_labeled_data=exclude_labeled_data)
     dataset.normalize_dataset()
 
     total_samples = len(dataset)

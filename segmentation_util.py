@@ -100,7 +100,7 @@ def train_and_validate(
     return train_losses, val_losses
 
 
-def log_segmentation_example(model, data, device, epoch):
+def log_segmentation_example(model, data, device, epoch, title='Validation Overlay'):
     inputs, labels = data[0][0], data[1][0].to(device).float()
     prediction = predict(model, inputs, device).squeeze(0).cpu().numpy()
 
@@ -144,7 +144,7 @@ def log_segmentation_example(model, data, device, epoch):
     # Log the image and masks using wandb
     wandb.log(
         {
-            "Validation Overlay": wandb.Image(
+            title: wandb.Image(
                 input_image, masks=mask_data, caption=f"Epoch {epoch+1}"
             )
         },

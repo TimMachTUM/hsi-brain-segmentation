@@ -1,8 +1,11 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.autograd import Function
 import segmentation_models_pytorch as smp
-import numpy as np
+from torch.autograd import Function
+import torch.nn as nn
+import torch
 
 class HyperspectralToGrayscale(nn.Module):
     def __init__(self):
@@ -138,3 +141,62 @@ class SegmentationModelWithWindowing(nn.Module):
         # Forward pass through the U-Net model
         output = self.pretrained_unet(hsi_image_normalized)
         return output
+
+class GradientReversalFunction(Function):
+    @staticmethod
+    def forward(ctx, x, lambda_param):
+        ctx.lambda_param = lambda_param
+        return x.view_as(x)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        return grad_output.neg() * ctx.lambda_param, None
+
+class GradientReversalLayer(nn.Module):
+    def __init__(self, lambda_param=1.0):
+        super(GradientReversalLayer, self).__init__()
+        self.lambda_param = lambda_param
+
+    def forward(self, x):
+        return GradientReversalFunction.apply(x, self.lambda_param)
+    
+
+class DomainClassifierFC(nn.Module):
+    def __init__(self, input_shape=(512, 7, 7), num_domains=2):
+        super(DomainClassifierFC, self).__init__()
+        # Flatten layer to reshape input from [8, 512, 7, 7] to [8, 512 * 7 * 7]
+        self.flatten = nn.Flatten()
+        self.fc_layers = nn.Sequential(
+            nn.Linear(input_shape[0] * input_shape[1] * input_shape[2], 1024),  # [8, 512 * 7 * 7] -> [8, 1024]
+            nn.ReLU(),
+            nn.Linear(1024, 512),  # [8, 1024] -> [8, 512]
+            nn.ReLU(),
+            nn.Linear(512, num_domains),  # [8, 512] -> [8, num_domains]
+            nn.Sigmoid()  # Sigmoid output to distinguish between the domains
+        )
+
+    def forward(self, x):
+        x = self.flatten(x)  # Flatten the input tensor
+        x = self.fc_layers(x)
+        return x
+
+
+class ModelWithDomainAdaptation(nn.Module):
+    def __init__(self, base_model, lambda_param, domain_classifier):
+        super(ModelWithDomainAdaptation, self).__init__()
+        self.encoder = base_model.encoder
+        self.decoder = base_model.decoder
+        self.segmentation_head = base_model.segmentation_head
+        self.grl = GradientReversalLayer(lambda_param)
+        self.domain_classifier = domain_classifier
+        
+    def forward(self, x):
+        features = self.encoder(x)
+        decoder_output = self.decoder(*features)
+        segmentation_output = self.segmentation_head(decoder_output)
+        if not self.training:
+            return segmentation_output
+        else:
+            reversed_features = self.grl(features[-1])
+            domain_output = self.domain_classifier(reversed_features)
+            return segmentation_output, domain_output

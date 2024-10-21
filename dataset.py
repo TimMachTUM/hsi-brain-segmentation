@@ -13,6 +13,8 @@ from torchvision.transforms import Compose, ToTensor, Grayscale, Resize, v2, Nor
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
+spectral.settings.envi_support_nonlowercase_params = True
+
 
 class SegmentationDataset(Dataset):
     def __init__(self, image_dir, label_dir, image_transform=None, label_transform=None, augmentation=None):

@@ -7,6 +7,7 @@ from torch.autograd import Function
 import torch.nn as nn
 import torch
 
+
 class HyperspectralToGrayscale(nn.Module):
     def __init__(self):
         super(HyperspectralToGrayscale, self).__init__()
@@ -18,7 +19,8 @@ class HyperspectralToGrayscale(nn.Module):
         # Apply the convolutional layer
         x = self.conv(x)
         return x
-    
+
+
 class ConvolutionalReducer(nn.Module):
     def __init__(self):
         super(ConvolutionalReducer, self).__init__()
@@ -27,17 +29,19 @@ class ConvolutionalReducer(nn.Module):
             nn.ReLU(),
             nn.Conv2d(256, 64, kernel_size=3, padding=1),
             nn.ReLU(),
-            nn.Conv2d(64, 1, kernel_size=3, padding=1)
+            nn.Conv2d(64, 1, kernel_size=3, padding=1),
         )
 
     def forward(self, x):
         return self.layers(x)
-    
+
 
 class CombinedModel(nn.Module):
     def __init__(self, encoder, segmenter):
         super(CombinedModel, self).__init__()
-        self.encoder = encoder  # This could be an autoencoder, PCA layer, or convolutional layer
+        self.encoder = (
+            encoder  # This could be an autoencoder, PCA layer, or convolutional layer
+        )
         self.segmenter = segmenter  # This is the pre-trained segmentation model
 
     def forward(self, x):
@@ -47,49 +51,60 @@ class CombinedModel(nn.Module):
         x = self.segmenter(x)  # Segment
         x = _crop_output(x, original_size)
         return x
-        
+
 
 class Unet(nn.Module):
-    def __init__(self, in_channels, out_channels, encoder_name='resnet34'):
+    def __init__(self, in_channels, out_channels, encoder_name="resnet34"):
         super(Unet, self).__init__()
-        self.model = smp.Unet(encoder_name=encoder_name, in_channels=in_channels, classes=out_channels)
-        
+        self.model = smp.Unet(
+            encoder_name=encoder_name, in_channels=in_channels, classes=out_channels
+        )
+
     def forward(self, x):
         original_size = x.shape[2:]
         x, pad = _pad_input(x)
         x = self.model(x)
         x = _crop_output(x, original_size)
         return x
+
 
 class UnetPlusPlus(nn.Module):
     def __init__(self, in_channels, out_channels):
         super(UnetPlusPlus, self).__init__()
-        self.model = smp.UnetPlusPlus(encoder_name='resnet34', in_channels=in_channels, classes=out_channels)
-        
+        self.model = smp.UnetPlusPlus(
+            encoder_name="resnet34", in_channels=in_channels, classes=out_channels
+        )
+
     def forward(self, x):
         original_size = x.shape[2:]
         x, pad = _pad_input(x)
         x = self.model(x)
         x = _crop_output(x, original_size)
         return x
-    
+
+
 class MAnet(nn.Module):
     def __init__(self, in_channels, out_channels):
         super(MAnet, self).__init__()
-        self.model = smp.MAnet(encoder_name='resnet34', in_channels=in_channels, classes=out_channels)
-        
+        self.model = smp.MAnet(
+            encoder_name="resnet34", in_channels=in_channels, classes=out_channels
+        )
+
     def forward(self, x):
         original_size = x.shape[2:]
         x, pad = _pad_input(x)
         x = self.model(x)
         x = _crop_output(x, original_size)
         return x
-    
+
+
 class Linknet(nn.Module):
     def __init__(self, in_channels, out_channels):
         super(Linknet, self).__init__()
-        self.model = smp.Linknet(encoder_name='resnet34', in_channels=in_channels, classes=out_channels)
-        
+        self.model = smp.Linknet(
+            encoder_name="resnet34", in_channels=in_channels, classes=out_channels
+        )
+
     def forward(self, x):
         original_size = x.shape[2:]
         x, pad = _pad_input(x)
@@ -108,14 +123,16 @@ def _pad_input(x):
     pad_left = pad_w // 2
     pad_right = pad_w - pad_left
     pad = (pad_left, pad_right, pad_top, pad_bottom)
-    
+
     # Apply padding
-    x = F.pad(x, pad, mode='replicate')
+    x = F.pad(x, pad, mode="replicate")
     return x, pad
+
 
 def _crop_output(x, original_size):
     # Crop to the original size
-    return x[:, :, :original_size[0], :original_size[1]]
+    return x[:, :, : original_size[0], : original_size[1]]
+
 
 class SegmentationModelWithWindowing(nn.Module):
     def __init__(self, pretrained_unet, window):
@@ -125,22 +142,33 @@ class SegmentationModelWithWindowing(nn.Module):
 
     def forward(self, hsi_image):
         # Apply windowing
-        hsi_image_windowed = hsi_image[:, self.window[0]:self.window[1], :, :]
-        
+        hsi_image_windowed = hsi_image[:, self.window[0] : self.window[1], :, :]
+
         # Calculate median along the windowed dimension
         hsi_image_median = torch.median(hsi_image_windowed, dim=1).values
-        
+
         # Normalize the image
-        hsi_image_min = hsi_image_median.min(dim=1, keepdim=True).values.min(dim=2, keepdim=True).values
-        hsi_image_max = hsi_image_median.max(dim=1, keepdim=True).values.max(dim=2, keepdim=True).values
-        hsi_image_normalized = (hsi_image_median - hsi_image_min) / (hsi_image_max - hsi_image_min)
-        
+        hsi_image_min = (
+            hsi_image_median.min(dim=1, keepdim=True)
+            .values.min(dim=2, keepdim=True)
+            .values
+        )
+        hsi_image_max = (
+            hsi_image_median.max(dim=1, keepdim=True)
+            .values.max(dim=2, keepdim=True)
+            .values
+        )
+        hsi_image_normalized = (hsi_image_median - hsi_image_min) / (
+            hsi_image_max - hsi_image_min
+        )
+
         # Add channel dimension
         hsi_image_normalized = hsi_image_normalized.unsqueeze(1)
-        
+
         # Forward pass through the U-Net model
         output = self.pretrained_unet(hsi_image_normalized)
         return output
+
 
 class GradientReversalFunction(Function):
     @staticmethod
@@ -152,6 +180,7 @@ class GradientReversalFunction(Function):
     def backward(ctx, grad_output):
         return grad_output.neg() * ctx.lambda_param, None
 
+
 class GradientReversalLayer(nn.Module):
     def __init__(self, lambda_param=1.0):
         super(GradientReversalLayer, self).__init__()
@@ -159,7 +188,7 @@ class GradientReversalLayer(nn.Module):
 
     def forward(self, x):
         return GradientReversalFunction.apply(x, self.lambda_param)
-    
+
 
 class DomainClassifierFC(nn.Module):
     def __init__(self, input_shape=(512, 7, 7), num_domains=2):
@@ -167,12 +196,14 @@ class DomainClassifierFC(nn.Module):
         # Flatten layer to reshape input from [8, 512, 7, 7] to [8, 512 * 7 * 7]
         self.flatten = nn.Flatten()
         self.fc_layers = nn.Sequential(
-            nn.Linear(input_shape[0] * input_shape[1] * input_shape[2], 1024),  # [8, 512 * 7 * 7] -> [8, 1024]
+            nn.Linear(
+                input_shape[0] * input_shape[1] * input_shape[2], 1024
+            ),  # [8, 512 * 7 * 7] -> [8, 1024]
             nn.ReLU(),
             nn.Linear(1024, 512),  # [8, 1024] -> [8, 512]
             nn.ReLU(),
             nn.Linear(512, num_domains),  # [8, 512] -> [8, num_domains]
-            nn.Sigmoid()  # Sigmoid output to distinguish between the domains
+            nn.Sigmoid(),  # Sigmoid output to distinguish between the domains
         )
 
     def forward(self, x):
@@ -189,7 +220,7 @@ class ModelWithDomainAdaptation(nn.Module):
         self.segmentation_head = base_model.segmentation_head
         self.grl = GradientReversalLayer(lambda_param)
         self.domain_classifier = domain_classifier
-        
+
     def forward(self, x):
         features = self.encoder(x)
         decoder_output = self.decoder(*features)

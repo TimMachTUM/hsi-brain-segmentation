@@ -13,11 +13,19 @@ from torchvision.transforms import Compose, ToTensor, Grayscale, Resize, v2, Nor
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
+
 spectral.settings.envi_support_nonlowercase_params = True
 
 
 class SegmentationDataset(Dataset):
-    def __init__(self, image_dir, label_dir, image_transform=None, label_transform=None, augmentation=None):
+    def __init__(
+        self,
+        image_dir,
+        label_dir,
+        image_transform=None,
+        label_transform=None,
+        augmentation=None,
+    ):
         """
         Args:
             image_dir (string): Directory with all the original images.
@@ -38,18 +46,21 @@ class SegmentationDataset(Dataset):
 
     def __getitem__(self, idx):
         img_name = os.path.join(self.image_dir, self.images[idx])
-        label_name = os.path.join(self.label_dir, self.images[idx])  # Assuming label and image files are named the same
-        
-        
+        label_name = os.path.join(
+            self.label_dir, self.images[idx]
+        )  # Assuming label and image files are named the same
+
         image = Image.open(img_name).convert("RGB")
-        label = Image.open(label_name).convert("L")  # Convert label image to grayscale if needed
+        label = Image.open(label_name).convert(
+            "L"
+        )  # Convert label image to grayscale if needed
 
         if self.augmentation:
             image, label = self.augmentation(image, label)
-            
+
         if self.image_transform:
             image = self.image_transform(image)
-        
+
         if self.label_transform:
             label = self.label_transform(label)
 
@@ -57,7 +68,14 @@ class SegmentationDataset(Dataset):
 
 
 class HSIDataset(Dataset):
-    def __init__(self, root_dir, image_transform=None, window=None, with_gt=False, exclude_labeled_data=False):
+    def __init__(
+        self,
+        root_dir,
+        image_transform=None,
+        window=None,
+        with_gt=False,
+        exclude_labeled_data=False,
+    ):
         """
         Initialize the dataset with the path to the data.
         Args:
@@ -70,8 +88,8 @@ class HSIDataset(Dataset):
         self.image_transform = image_transform
         self.window = window
         self.with_gt = with_gt
-        labeled_data = ['004-02', '012-02', '021-01', '027-02', '030-02']
-        
+        labeled_data = ["004-02", "012-02", "021-01", "027-02", "030-02"]
+
         subdirs = os.listdir(root_dir)
         if exclude_labeled_data:
             subdirs = [subdir for subdir in subdirs if subdir not in labeled_data]
@@ -80,16 +98,22 @@ class HSIDataset(Dataset):
         for subdir in subdirs:
             subdir_path = os.path.join(root_dir, subdir)
             if os.path.isdir(subdir_path):
-                raw_path = os.path.join(subdir_path, 'raw.hdr')
-                gt_path = os.path.join(subdir_path, 'gtMap.hdr')
+                raw_path = os.path.join(subdir_path, "raw.hdr")
+                gt_path = os.path.join(subdir_path, "gtMap.hdr")
                 if with_gt:
-                    gt_path = os.path.join(subdir_path, 'gtMap.png')
-                img_path = os.path.join(subdir_path, 'image.jpg')
-                dark_path = os.path.join(subdir_path, 'darkReference.hdr')
-                white_path = os.path.join(subdir_path, 'whiteReference.hdr')
+                    gt_path = os.path.join(subdir_path, "gtMap.png")
+                img_path = os.path.join(subdir_path, "image.jpg")
+                dark_path = os.path.join(subdir_path, "darkReference.hdr")
+                white_path = os.path.join(subdir_path, "whiteReference.hdr")
 
-                if os.path.exists(raw_path) and os.path.exists(gt_path) and os.path.exists(img_path):
-                    self.data_paths.append((raw_path, gt_path, img_path, dark_path, white_path))
+                if (
+                    os.path.exists(raw_path)
+                    and os.path.exists(gt_path)
+                    and os.path.exists(img_path)
+                ):
+                    self.data_paths.append(
+                        (raw_path, gt_path, img_path, dark_path, white_path)
+                    )
 
         self.data_paths.sort()
 
@@ -104,7 +128,7 @@ class HSIDataset(Dataset):
         Retrieve the HSI image and corresponding label at the index `idx`.
         Args:
         idx (int): The index of the item.
-        
+
         Returns:
         tuple: (image, label) where `image` is a hyperspectral image and `label` is the corresponding ground truth map.
         """
@@ -125,20 +149,24 @@ class HSIDataset(Dataset):
             label = transform(label)
         else:
             label = spectral.open_image(gt_path).load()
-            label = (label.transpose(2,0,1) == 3).astype(int)
+            label = (label.transpose(2, 0, 1) == 3).astype(int)
             label = torch.tensor(label, dtype=torch.int8)
 
         img = cv2.imread(img_path, cv2.IMREAD_UNCHANGED)
-        img = img[:,:,[2,1,0]]
+        img = img[:, :, [2, 1, 0]]
 
         hsi_image = (hsi_image - dark_full) / (white_full - dark_full)
         hsi_image[hsi_image <= 0] = 10**-2
-        hsi_image = hsi_image.transpose(2,0,1)
+        hsi_image = hsi_image.transpose(2, 0, 1)
 
         if self.window is not None:
             channels = self.get_window_from_wavelengths(self.window)
-            hsi_image_median = np.median(hsi_image[channels[0]:channels[1], :, :], axis=0)
-            hsi_image = (hsi_image_median - np.min(hsi_image_median)) / (np.max(hsi_image_median) - np.min(hsi_image_median))
+            hsi_image_median = np.median(
+                hsi_image[channels[0] : channels[1], :, :], axis=0
+            )
+            hsi_image = (hsi_image_median - np.min(hsi_image_median)) / (
+                np.max(hsi_image_median) - np.min(hsi_image_median)
+            )
             hsi_image = np.expand_dims(hsi_image, axis=0)
 
         # Convert to PyTorch tensors
@@ -156,13 +184,15 @@ class HSIDataset(Dataset):
         Get the window indices corresponding to the given wavelengths.
         Args:
         wavelengths (tuple): The start and end wavelengths of the window.
-        
+
         Returns:
         tuple: The start and end indices of the window.
         """
         img = spectral.open_image(self.data_paths[0][0])
-        wavelength_array = np.array(img.metadata['wavelength']).astype(float)
-        indices = np.where((wavelength_array >= wavelengths[0]) & (wavelength_array <= wavelengths[1]))[0]
+        wavelength_array = np.array(img.metadata["wavelength"]).astype(float)
+        indices = np.where(
+            (wavelength_array >= wavelengths[0]) & (wavelength_array <= wavelengths[1])
+        )[0]
         start_idx, end_idx = indices[0], indices[-1]
         return (start_idx, end_idx)
 
@@ -170,9 +200,11 @@ class HSIDataset(Dataset):
         """
         Compute the mean and standard deviation of the dataset.
         """
-        if os.path.exists('./normalization_coefficients/mean.npy') and os.path.exists('./normalization_coefficients/std.npy'):
-            mean = np.load('./normalization_coefficients/mean.npy')
-            std = np.load('./normalization_coefficients/std.npy')
+        if os.path.exists("./normalization_coefficients/mean.npy") and os.path.exists(
+            "./normalization_coefficients/std.npy"
+        ):
+            mean = np.load("./normalization_coefficients/mean.npy")
+            std = np.load("./normalization_coefficients/std.npy")
             return mean, std
 
         # Initialize variables to store the sum and sum of squares
@@ -184,14 +216,14 @@ class HSIDataset(Dataset):
         for i in range(len(self)):
             image, _ = self[i]
             sum_ += image.sum()
-            sum_sq += (image ** 2).sum()
+            sum_sq += (image**2).sum()
             num_pixels += image.numel()
 
         # Compute the mean and standard deviation
         mean = sum_ / num_pixels
-        std = ((sum_sq / num_pixels) - (mean ** 2)) ** 0.5
-        np.save('./normalization_coefficients/mean.npy', mean)
-        np.save('./normalization_coefficients/std.npy', std)
+        std = ((sum_sq / num_pixels) - (mean**2)) ** 0.5
+        np.save("./normalization_coefficients/mean.npy", mean)
+        np.save("./normalization_coefficients/std.npy", std)
 
         return mean, std
 
@@ -202,12 +234,12 @@ class HSIDataset(Dataset):
         """
 
         mean, std = self.get_mean_std()
-        self.image_transform = transforms.Compose([
-            transforms.CenterCrop(224),
-        ])
-        self.label_transform = transforms.Compose([
-            transforms.CenterCrop(224)
-        ])
+        self.image_transform = transforms.Compose(
+            [
+                transforms.CenterCrop(224),
+            ]
+        )
+        self.label_transform = transforms.Compose([transforms.CenterCrop(224)])
 
     def center_crop(self, image, crop_size):
         """
@@ -228,12 +260,24 @@ class HSIDataset(Dataset):
         start_y = height // 2 - (new_height // 2)
 
         # Perform the crop
-        cropped_image = image[start_y:start_y + new_height, start_x:start_x + new_width]
+        cropped_image = image[
+            start_y : start_y + new_height, start_x : start_x + new_width
+        ]
 
         return cropped_image
 
+
 class SegmentationDatasetWithRandomCrops(Dataset):
-    def __init__(self, image_dir, label_dir, image_transform=None, label_transform=None, crop_height=512, crop_width=512, threshold=0.1):
+    def __init__(
+        self,
+        image_dir,
+        label_dir,
+        image_transform=None,
+        label_transform=None,
+        crop_height=512,
+        crop_width=512,
+        threshold=0.1,
+    ):
         """
         Args:
             image_dir (string): Directory with all the original images.
@@ -259,16 +303,18 @@ class SegmentationDatasetWithRandomCrops(Dataset):
     def __getitem__(self, idx):
         img_name = os.path.join(self.image_dir, self.images[idx])
         label_name = os.path.join(self.label_dir, self.images[idx])
-        
+
         image = Image.open(img_name).convert("RGB")
         label = Image.open(label_name).convert("L")  # Convert label image to grayscale
 
         image = np.array(image)
         label = np.array(label)
         label = (label > 0).astype(np.uint8)  # Binarize the label image
-        
+
         # Apply the random cropping with condition
-        cropped_image, cropped_label = self.random_crop_with_condition(image, label, self.crop_height, self.crop_width, self.threshold)
+        cropped_image, cropped_label = self.random_crop_with_condition(
+            image, label, self.crop_height, self.crop_width, self.threshold
+        )
 
         if cropped_image is None or cropped_label is None:
             # Handling case where no valid crop is found, you could choose to not augment or use the full image as a fallback
@@ -281,25 +327,28 @@ class SegmentationDatasetWithRandomCrops(Dataset):
 
         if self.image_transform:
             cropped_image = self.image_transform(cropped_image)
-        
+
         if self.label_transform:
             cropped_label = self.label_transform(cropped_label)
 
-
         return cropped_image, cropped_label
-    
+
     def calculate_vessel_ratio(self, mask):
         return np.sum(mask == 1) / np.prod(mask.shape)
 
-    def random_crop_with_condition(self, image, mask, crop_height, crop_width, threshold=0.1):
-        assert image.shape[:2] == mask.shape[:2], "Image and mask must have the same dimensions."
+    def random_crop_with_condition(
+        self, image, mask, crop_height, crop_width, threshold=0.1
+    ):
+        assert (
+            image.shape[:2] == mask.shape[:2]
+        ), "Image and mask must have the same dimensions."
 
         height, width = image.shape[:2]
         for _ in range(100):  # Try up to 100 times to find a valid crop
             x = random.randint(0, width - crop_width)
             y = random.randint(0, height - crop_height)
-            cropped_image = image[y:y+crop_height, x:x+crop_width]
-            cropped_mask = mask[y:y+crop_height, x:x+crop_width]
+            cropped_image = image[y : y + crop_height, x : x + crop_width]
+            cropped_mask = mask[y : y + crop_height, x : x + crop_width]
 
             if self.calculate_vessel_ratio(cropped_mask) >= threshold:
                 return cropped_image, cropped_mask
@@ -307,75 +356,90 @@ class SegmentationDatasetWithRandomCrops(Dataset):
         # If no valid crop is found, return a center crop
         center_x = (width - crop_width) // 2
         center_y = (height - crop_height) // 2
-        center_cropped_image = image[center_y:center_y+crop_height, center_x:center_x+crop_width]
-        center_cropped_mask = mask[center_y:center_y+crop_height, center_x:center_x+crop_width]
-        
+        center_cropped_image = image[
+            center_y : center_y + crop_height, center_x : center_x + crop_width
+        ]
+        center_cropped_mask = mask[
+            center_y : center_y + crop_height, center_x : center_x + crop_width
+        ]
+
         return center_cropped_image, center_cropped_mask
 
 
-def build_FIVES_dataloaders(batch_size=8, proportion_augmented_data=0.1, num_channels=1, width=512, height=512):
-    train_image_path = './FIVES/train/Original'
-    train_label_path = './FIVES/train/GroundTruth'
-    test_image_path = './FIVES/test/Original'
-    test_label_path = './FIVES/test/GroundTruth'
+def build_FIVES_dataloaders(
+    batch_size=8, proportion_augmented_data=0.1, num_channels=1, width=512, height=512
+):
+    train_image_path = "./FIVES/train/Original"
+    train_label_path = "./FIVES/train/GroundTruth"
+    test_image_path = "./FIVES/test/Original"
+    test_label_path = "./FIVES/test/GroundTruth"
     np.random.seed(42)
 
     # Define transformations for images
-    normalization = Normalize(mean=[0.3728, 0.1666, 0.0678], std=[0.1924, 0.0956, 0.0395]) if num_channels == 3 else Normalize(mean=[0.2147], std=[0.1163])
-    image_transform = Compose([
-        Grayscale(num_output_channels=num_channels),  # Convert the image to grayscale
-        Resize((width, height)),                # Resize images to 512x512
-        ToTensor(),                         # Convert the image to a PyTorch tensor
-        normalization
-    ])
+    normalization = (
+        Normalize(mean=[0.3728, 0.1666, 0.0678], std=[0.1924, 0.0956, 0.0395])
+        if num_channels == 3
+        else Normalize(mean=[0.2147], std=[0.1163])
+    )
+    image_transform = Compose(
+        [
+            Grayscale(
+                num_output_channels=num_channels
+            ),  # Convert the image to grayscale
+            Resize((width, height)),  # Resize images to 512x512
+            ToTensor(),  # Convert the image to a PyTorch tensor
+            normalization,
+        ]
+    )
 
     # Define transformations for labels, if needed
-    label_transform = Compose([
-        Resize((width, height)),  # Resize labels to 512x512
-        ToTensor()           # Convert label to a tensor
-    ])
+    label_transform = Compose(
+        [
+            Resize((width, height)),  # Resize labels to 512x512
+            ToTensor(),  # Convert label to a tensor
+        ]
+    )
 
-    augmentation = v2.RandomApply([
-        v2.RandomHorizontalFlip(p=0.5),
-        v2.RandomVerticalFlip(p=0.5),
-        v2.RandomRotation(degrees=90),
-        v2.RandomAffine(degrees=0, translate=(0.1, 0.1), scale=(0.9, 1.1)),
-    ])
+    augmentation = v2.RandomApply(
+        [
+            v2.RandomHorizontalFlip(p=0.5),
+            v2.RandomVerticalFlip(p=0.5),
+            v2.RandomRotation(degrees=90),
+            v2.RandomAffine(degrees=0, translate=(0.1, 0.1), scale=(0.9, 1.1)),
+        ]
+    )
 
-    random_crop_image_transform = Compose([
-        Grayscale(num_output_channels=num_channels),
-        ToTensor()
-    ])
+    random_crop_image_transform = Compose(
+        [Grayscale(num_output_channels=num_channels), ToTensor()]
+    )
     random_crop_label_transform = Compose([ToTensor()])
 
     random_crop_dataset = SegmentationDatasetWithRandomCrops(
-        train_image_path, 
-        train_label_path, 
-        random_crop_image_transform, 
+        train_image_path,
+        train_label_path,
+        random_crop_image_transform,
         random_crop_label_transform,
         crop_width=width,
-        crop_height=height)
+        crop_height=height,
+    )
 
     dataset = SegmentationDataset(
-        train_image_path, 
-        train_label_path, 
-        image_transform, 
+        train_image_path,
+        train_label_path,
+        image_transform,
         label_transform,
     )
 
     testset = SegmentationDataset(
-        test_image_path, 
-        test_label_path, 
-        image_transform, 
-        label_transform
+        test_image_path, test_label_path, image_transform, label_transform
     )
 
     augmented_dataset = SegmentationDataset(
-        train_image_path, 
-        train_label_path, 
-        image_transform, 
+        train_image_path,
+        train_label_path,
+        image_transform,
         label_transform,
-        augmentation
+        augmentation,
     )
 
     # Prepare DataLoader
@@ -386,29 +450,46 @@ def build_FIVES_dataloaders(batch_size=8, proportion_augmented_data=0.1, num_cha
     train_dataset = Subset(dataset, train_indices)
     val_dataset = Subset(dataset, val_indices)
 
-    augmented_dataset = Subset(augmented_dataset, train_indices[:int(proportion_augmented_data * len(train_indices))])
-    random_crop_dataset = Subset(random_crop_dataset, train_indices[:int(proportion_augmented_data * len(train_indices))])
+    augmented_dataset = Subset(
+        augmented_dataset,
+        train_indices[: int(proportion_augmented_data * len(train_indices))],
+    )
+    random_crop_dataset = Subset(
+        random_crop_dataset,
+        train_indices[: int(proportion_augmented_data * len(train_indices))],
+    )
 
-    train_dataset = ConcatDataset([train_dataset, random_crop_dataset, augmented_dataset])
-    print(f'Number of samples in the training set: {len(train_dataset)}, validation set: {len(val_dataset)}')
-    print(f'Number of samples in the test set: {len(testset)}')
+    train_dataset = ConcatDataset(
+        [train_dataset, random_crop_dataset, augmented_dataset]
+    )
+    print(
+        f"Number of samples in the training set: {len(train_dataset)}, validation set: {len(val_dataset)}"
+    )
+    print(f"Number of samples in the test set: {len(testset)}")
 
-    trainloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=8)
-    validationloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=8)
-    testloader = DataLoader(testset, batch_size=batch_size, shuffle=False, num_workers=8)
+    trainloader = DataLoader(
+        train_dataset, batch_size=batch_size, shuffle=True, num_workers=8
+    )
+    validationloader = DataLoader(
+        val_dataset, batch_size=batch_size, shuffle=False, num_workers=8
+    )
+    testloader = DataLoader(
+        testset, batch_size=batch_size, shuffle=False, num_workers=8
+    )
 
     return trainloader, validationloader, testloader
+
 
 def create_montage(dataset, num_images=10):
     # Define the number of images you want to show in the montage
     num_images = min(num_images, len(dataset))
 
     fig, axes = plt.subplots(num_images, 2, figsize=(10, num_images * 5))
-    
+
     for i in range(num_images):
         sample = dataset[i]
         image, label = sample[2], sample[1]
-        
+
         # Convert image and label to numpy arrays for plotting
         if isinstance(image, torch.Tensor):
             image = image.numpy().transpose(1, 2, 0)
@@ -416,23 +497,30 @@ def create_montage(dataset, num_images=10):
             label = label.numpy().squeeze()
             overlay = np.zeros_like(image)
             overlay[label == 1] = [0, 255, 0]
-        
+
         # Plot the image
         axes[i, 0].imshow(image)
-        axes[i, 0].axis('off')
-        axes[i, 0].set_title('Image {i}'.format(i=i))
-        
+        axes[i, 0].axis("off")
+        axes[i, 0].set_title("Image {i}".format(i=i))
+
         # Plot the label
-        axes[i, 1].imshow(label, cmap='gray')
-        axes[i, 1].axis('off')
-        axes[i, 1].set_title('Label')
-    
+        axes[i, 1].imshow(label, cmap="gray")
+        axes[i, 1].axis("off")
+        axes[i, 1].set_title("Label")
+
     plt.tight_layout()
     plt.show()
 
 
-def build_hsi_dataloader(train_split=0.8, val_split=0.1, test_split=0.1, batch_size=8, window=None, exclude_labeled_data=False):
-    path = '../../ivan/HELICoiD/HSI_Human_Brain_Database_IEEE_Access/'
+def build_hsi_dataloader(
+    train_split=0.8,
+    val_split=0.1,
+    test_split=0.1,
+    batch_size=8,
+    window=None,
+    exclude_labeled_data=False,
+):
+    path = "../../ivan/HELICoiD/HSI_Human_Brain_Database_IEEE_Access/"
 
     dataset = HSIDataset(path, window=window, exclude_labeled_data=exclude_labeled_data)
     dataset.normalize_dataset()
@@ -454,8 +542,8 @@ def build_hsi_dataloader(train_split=0.8, val_split=0.1, test_split=0.1, batch_s
 
     # Split the indices based on calculated sizes
     train_indices = indices[:train_size]
-    val_indices = indices[train_size:train_size + val_size]
-    test_indices = indices[train_size + val_size:]
+    val_indices = indices[train_size : train_size + val_size]
+    test_indices = indices[train_size + val_size :]
 
     # Create subsets for each split
     trainset = Subset(dataset, train_indices)

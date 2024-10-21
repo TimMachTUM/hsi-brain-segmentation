@@ -5,6 +5,7 @@ import torch
 import torch.nn as nn
 import itertools
 
+
 def model_pipeline(
     model,
     trainloader_source,
@@ -176,7 +177,8 @@ def train_and_validate(
                 val_running_loss_source += loss.item()
                 if with_overlays and i == 0:
                     log_segmentation_example(
-                        model, data, device, epoch, title="Validation Overlay FIVES"                    )
+                        model, data, device, epoch, title="Validation Overlay FIVES"
+                    )
 
         val_loss_source = val_running_loss_source / len(validationloader_source)
         val_loss_target = val_running_loss_target / len(testloader_target)

@@ -100,21 +100,9 @@ def train_and_validate(
             segmentation_output_source, domain_output_source = model(inputs_source)
             _, domain_output_target = model(inputs_target)
 
-            # Create domain labels: source=[0,1] , target=[1,0]
-            domain_labels_source = (
-                F.one_hot(
-                    torch.ones(inputs_source.size(0), dtype=torch.long), num_classes=2
-                )
-                .float()
-                .to(device)
-            )
-            domain_labels_target = (
-                F.one_hot(
-                    torch.zeros(inputs_target.size(0), dtype=torch.long), num_classes=2
-                )
-                .float()
-                .to(device)
-            )
+            # Create domain labels: source=0 , target=1
+            domain_labels_source = torch.ones(inputs_source.size(0), dtype=torch.long).to(device)
+            domain_labels_target = torch.zeros(inputs_target.size(0), dtype=torch.long).to(device)
 
             # Compute segmentation loss
             loss_segmentation = criterion_segmentation(

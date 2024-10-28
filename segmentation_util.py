@@ -501,6 +501,8 @@ def train_sweep(config=None):
 
                     loss = criterion(outputs, labels)
                     val_running_loss += loss.item()
+                    if i == 0:
+                        log_segmentation_example(model, data, device, epoch)
 
             val_loss = val_running_loss / len(validationloader)
             val_losses.append(val_loss)

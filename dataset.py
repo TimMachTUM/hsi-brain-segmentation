@@ -9,7 +9,16 @@ import cv2
 import random
 from torch.utils.data import DataLoader, random_split, ConcatDataset, Subset
 import os
-from torchvision.transforms import Compose, ToTensor, Grayscale, Resize, v2, Normalize, InterpolationMode
+from torchvision.transforms import (
+    Compose,
+    ToTensor,
+    Grayscale,
+    Resize,
+    v2,
+    Normalize,
+    InterpolationMode,
+    CenterCrop,
+)
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
@@ -367,7 +376,12 @@ class SegmentationDatasetWithRandomCrops(Dataset):
 
 
 def build_FIVES_dataloaders(
-    batch_size=8, proportion_augmented_data=0.1, num_channels=1, width=512, height=512
+    batch_size=8,
+    proportion_augmented_data=0.1,
+    num_channels=1,
+    width=512,
+    height=512,
+    cropped=False,
 ):
     train_image_path = "./FIVES/train/Original"
     train_label_path = "./FIVES/train/GroundTruth"
@@ -386,7 +400,11 @@ def build_FIVES_dataloaders(
             Grayscale(
                 num_output_channels=num_channels
             ),  # Convert the image to grayscale
-            Resize((width, height), interpolation=InterpolationMode.BICUBIC),  # Resize images to 512x512
+            (
+                CenterCrop((width, height))
+                if cropped
+                else Resize((width, height), interpolation=InterpolationMode.BICUBIC)
+            ),  # Resize images to 512x512
             ToTensor(),  # Convert the image to a PyTorch tensor
             normalization,
         ]
@@ -395,7 +413,13 @@ def build_FIVES_dataloaders(
     # Define transformations for labels, if needed
     label_transform = Compose(
         [
-            Resize((width, height), interpolation=InterpolationMode.NEAREST_EXACT),
+            (
+                CenterCrop((width, height))
+                if cropped
+                else Resize(
+                    (width, height), interpolation=InterpolationMode.NEAREST_EXACT
+                )
+            ),
             ToTensor(),  # Convert label to a tensor
         ]
     )

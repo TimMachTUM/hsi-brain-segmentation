@@ -187,28 +187,41 @@ class GradientReversalLayer(nn.Module):
         self.lambda_param = lambda_param
 
     def forward(self, x):
-        return GradientReversalFunction.apply(x, self.lambda_param)
+        if isinstance(x, list):
+            # Apply GRL to each tensor in the list
+            return [GradientReversalFunction.apply(tensor, self.lambda_param) for tensor in x]
+        else:
+            return GradientReversalFunction.apply(x, self.lambda_param)
 
 
-class DomainClassifierFC(nn.Module):
-    def __init__(self, input_shape=(512, 7, 7), num_domains=2):
-        super(DomainClassifierFC, self).__init__()
-        # Flatten layer to reshape input from [8, 512, 7, 7] to [8, 512 * 7 * 7]
-        self.flatten = nn.Flatten()
-        self.fc_layers = nn.Sequential(
-            nn.Linear(
-                input_shape[0] * input_shape[1] * input_shape[2], 1024
-            ),  # [8, 512 * 7 * 7] -> [8, 1024]
-            nn.ReLU(),
-            nn.Linear(1024, 512),  # [8, 1024] -> [8, 512]
-            nn.ReLU(),
-            nn.Linear(512, num_domains),  # [8, 512] -> [8, num_domains]
-            nn.Sigmoid(),  # Sigmoid output to distinguish between the domains
+
+class DomainDiscriminatorFC(nn.Module):
+    def __init__(self, in_channels_list, hidden_dim=256, num_domains=2):
+        super(DomainDiscriminatorFC, self).__init__()
+        
+        self.global_pool = nn.AdaptiveAvgPool2d((1, 1))
+        
+        total_channels = sum(in_channels_list)
+        
+        self.classifier = nn.Sequential(
+            nn.Linear(total_channels, hidden_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(hidden_dim, num_domains)
         )
-
-    def forward(self, x):
-        x = self.flatten(x)  # Flatten the input tensor
-        x = self.fc_layers(x)
+        
+    def forward(self, feature_list):
+        pooled_features = []
+        for feature in feature_list:
+            # Apply global average pooling
+            x = self.global_pool(feature)
+            # Flatten to a vector
+            x = x.view(x.size(0), -1)
+            pooled_features.append(x)
+        
+        # Concatenate all pooled features
+        x = torch.cat(pooled_features, dim=1)
+        # Pass through the classifier
+        x = self.classifier(x)
         return x
 
 
@@ -228,6 +241,6 @@ class ModelWithDomainAdaptation(nn.Module):
         if not self.training:
             return segmentation_output
         else:
-            reversed_features = self.grl(features[-1])
+            reversed_features = self.grl(features)
             domain_output = self.domain_classifier(reversed_features)
             return segmentation_output, domain_output

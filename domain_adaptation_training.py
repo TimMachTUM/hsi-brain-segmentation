@@ -1,31 +1,32 @@
 import wandb
 import torch.nn.functional as F
-from segmentation_util import log_segmentation_example, evaluate_model
+from segmentation_util import log_segmentation_example, evaluate_model, build_segmentation_model, build_criterion, build_optimizer
 import torch
 import torch.nn as nn
 import itertools
+from HSI_Net import DomainDiscriminatorFC, ModelWithDomainAdaptation
 
 
 def model_pipeline(
-    model,
     trainloader_source,
     validationloader_source,
     testloader_source,
     trainloader_target,
     testloader_target,
-    criterion_segmentation,
-    optimizer,
     config,
     project,
-    epochs=10,
-    model_name=None,
     device="cuda",
     batch_print=10,
     evaluate=True,
     with_overlays=False,
 ):
-    with wandb.init(project=project, config=config, name=model_name):
+    with wandb.init(project=project, config=config, name=config['model']):
         config = wandb.config
+        segmentation_model = build_segmentation_model(config.encoder, config.architecture, device)
+        domain_discriminator = DomainDiscriminatorFC(in_channels_list=[1, 64, 256, 512, 1024, 2048]).to(device)
+        model = ModelWithDomainAdaptation(segmentation_model, config.lambda_param, domain_discriminator).to(device)
+        criterion_segmentation = build_criterion(config.loss)
+        optimizer = build_optimizer(model, learning_rate=config.learning_rate, optimizer=config.optimizer)
         train_loss, val_loss_source, val_loss_target = train_and_validate(
             model,
             trainloader_source,
@@ -35,15 +36,15 @@ def model_pipeline(
             testloader_target,
             criterion_segmentation,
             optimizer,
-            epochs=epochs,
-            model_name=model_name,
+            epochs=config.epochs,
+            model_name=config.model,
             device=device,
             batch_print=batch_print,
             with_overlays=with_overlays,
         )
         if evaluate:
-            if model_name:
-                model.load_state_dict(torch.load(f"./models/{model_name}.pth"))
+            if config.model:
+                model.load_state_dict(torch.load(f"./models/{config.model}.pth"))
             evaluate_model(model, testloader_target, device)
         return model, train_loss, val_loss_source, val_loss_target
 
@@ -152,10 +153,9 @@ def train_and_validate(
                 outputs = model(inputs)
                 loss = criterion_segmentation(outputs, labels)
                 val_running_loss_target += loss.item()
-                if with_overlays and i == 0:
-                    log_segmentation_example(
-                        model, data, device, epoch, title="Validation Overlay HSI"
-                    )
+                log_segmentation_example(
+                    model, data, device, epoch, title=f"Validation Overlay HSI {i}"
+                )
 
             # validation phase on source data
             for i, data in enumerate(validationloader_source):

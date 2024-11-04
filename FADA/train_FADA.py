@@ -32,21 +32,37 @@ def model_pipeline(
     evaluate=True,
     with_overlays=False,
 ):
-    with wandb.init(project=project, config=config, name=config['model']):
+    with wandb.init(project=project, config=config, name=config["model"]):
         config = wandb.config
-        segmentation_model = build_segmentation_model(config.encoder, config.architecture, device)
-        if 'pretrained' in config:
+        segmentation_model = build_segmentation_model(
+            config.encoder, config.architecture, device
+        )
+        if "pretrained" in config:
             print(f"Loading pretrained model from {config.pretrained}")
             segmentation_model.load_state_dict(torch.load(config.pretrained))
         feature_extractor = FeatureExtractor(segmentation_model).to(device)
         classifier = Classifier(segmentation_model).to(device)
-        discriminator = PixelDiscriminator(input_nc=config.input_nc, num_classes=1).to(device)
+        discriminator = PixelDiscriminator(input_nc=config.input_nc, num_classes=1).to(
+            device
+        )
 
         criterion_segmentation = build_criterion(config.seg_loss)
-        optimizer_fea = build_optimizer(feature_extractor, learning_rate=config.learning_rate_fea, optimizer=config.optimizer)
-        optimizer_cls = build_optimizer(classifier, learning_rate=config.learning_rate_cls, optimizer=config.optimizer)
-        optimizer_dis = build_optimizer(discriminator, learning_rate=config.learning_rate_dis, optimizer=config.optimizer)
-        
+        optimizer_fea = build_optimizer(
+            feature_extractor,
+            learning_rate=config.learning_rate_fea,
+            optimizer=config.optimizer,
+        )
+        optimizer_cls = build_optimizer(
+            classifier,
+            learning_rate=config.learning_rate_cls,
+            optimizer=config.optimizer,
+        )
+        optimizer_dis = build_optimizer(
+            discriminator,
+            learning_rate=config.learning_rate_dis,
+            optimizer=config.optimizer,
+        )
+
         train_loss, val_loss_source, val_loss_target = train_and_validate(
             feature_extractor,
             classifier,
@@ -96,7 +112,7 @@ def train_and_validate(
 ):
     train_losses, val_losses_source, val_losses_target = [], [], []
     highest_dice = 0
-    
+
     # Create infinite iterators
     source_domain_iter = itertools.cycle(trainloader_source)
     target_domain_iter = itertools.cycle(trainloader_target)
@@ -128,7 +144,7 @@ def train_and_validate(
             # Get target domain data for the current window
             target_domain_data = next(target_domain_iter)
             tgt_input = target_domain_data[0].to(device)
-            
+
             src_size = src_input.shape[-2:]
             tgt_size = tgt_input.shape[-2:]
 
@@ -153,7 +169,9 @@ def train_and_validate(
             tgt_D_pred = discriminator(tgt_features[-1], tgt_size)
             loss_adv_tgt = 0.001 * soft_label_cross_entropy(
                 tgt_D_pred,
-                torch.cat((tgt_soft_label, torch.zeros_like(tgt_soft_label).to(device)), dim=1),
+                torch.cat(
+                    (tgt_soft_label, torch.zeros_like(tgt_soft_label).to(device)), dim=1
+                ),
             )
             loss_adv_tgt.backward()
             optimizer_fea.step()
@@ -170,13 +188,20 @@ def train_and_validate(
             tgt_D_pred = discriminator(tgt_features[-1].detach().to(device), tgt_size)
             loss_D_tgt = 0.5 * soft_label_cross_entropy(
                 tgt_D_pred,
-                torch.cat((torch.zeros_like(tgt_soft_label).to(device), tgt_soft_label), dim=1),
+                torch.cat(
+                    (torch.zeros_like(tgt_soft_label).to(device), tgt_soft_label), dim=1
+                ),
             )
             loss_D_tgt.backward()
 
             optimizer_D.step()
             # Update running losses
-            running_loss += loss_seg.item() + loss_D_src.item() + loss_D_tgt.item() + loss_adv_tgt.item()
+            running_loss += (
+                loss_seg.item()
+                + loss_D_src.item()
+                + loss_D_tgt.item()
+                + loss_adv_tgt.item()
+            )
             train_loss += running_loss
 
             if (batch_idx + 1) % batch_print == 0:
@@ -184,12 +209,12 @@ def train_and_validate(
                     f"Epoch {epoch+1}, Batch {batch_idx+1}/{num_batches}, Total Loss: {running_loss/batch_print:.4f}, Segmentation Loss: {loss_seg.item():.4f}, Domain Loss Source: {loss_D_src.item():.4f}, Domain Loss Target: {loss_D_tgt.item():.4f}, Adversarial Loss Target: {loss_adv_tgt.item():.4f}"
                 )
                 running_loss = 0.0  # Reset running loss after printing
-                
+
         train_loss = train_loss / num_batches
         train_losses.append(train_loss)
         print(f"Epoch {epoch+1}, Train Loss: {train_loss:.4f}")
-        wandb.log({"epoch": epoch + 1, "train/loss": train_loss}, step=epoch + 1)        
-        
+        wandb.log({"epoch": epoch + 1, "train/loss": train_loss}, step=epoch + 1)
+
         # Validation
         model = SegmentationModelFADA(feature_extractor, classifier).to(device)
         model.eval()
@@ -264,8 +289,7 @@ def train_and_validate(
         wandb.log(
             {"epoch": epoch + 1, "dice_score/target": dice_score_target}, step=epoch + 1
         )
-        
+
         del model
 
     return train_losses, val_losses_source, val_losses_target
-        

@@ -35,6 +35,9 @@ def model_pipeline(
     with wandb.init(project=project, config=config, name=config['model']):
         config = wandb.config
         segmentation_model = build_segmentation_model(config.encoder, config.architecture, device)
+        if 'pretrained' in config:
+            print(f"Loading pretrained model from {config.pretrained}")
+            segmentation_model.load_state_dict(torch.load(config.pretrained))
         feature_extractor = FeatureExtractor(segmentation_model).to(device)
         classifier = Classifier(segmentation_model).to(device)
         discriminator = PixelDiscriminator(input_nc=config.input_nc, num_classes=1).to(device)

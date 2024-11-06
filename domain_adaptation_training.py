@@ -1,10 +1,17 @@
 import wandb
 import torch.nn.functional as F
-from segmentation_util import log_segmentation_example, evaluate_model, build_segmentation_model, build_criterion, build_optimizer
+from segmentation_util import (
+    log_segmentation_example,
+    evaluate_model,
+    build_segmentation_model,
+    build_criterion,
+    build_optimizer,
+)
 import torch
 import torch.nn as nn
 import itertools
 from HSI_Net import DomainDiscriminatorFC, ModelWithDomainAdaptation
+from segmentation_models_pytorch.encoders import get_encoder
 
 
 def model_pipeline(
@@ -20,14 +27,29 @@ def model_pipeline(
     evaluate=True,
     with_overlays=False,
 ):
-    with wandb.init(project=project, config=config, name=config['model']):
+    with wandb.init(project=project, config=config, name=config["model"]):
         config = wandb.config
-        segmentation_model = build_segmentation_model(config.encoder, config.architecture, device)
-        domain_discriminator = DomainDiscriminatorFC(in_channels_list=[1, 64, 256, 512, 1024, 2048]).to(device)
-        model = ModelWithDomainAdaptation(segmentation_model, config.lambda_param, domain_discriminator).to(device)
+        segmentation_model = build_segmentation_model(
+            config.encoder, config.architecture, device, in_channels=config.in_channels
+        )
+        if "pretrained" in config:
+            print(f"Loading pretrained model from {config.pretrained}")
+            segmentation_model.load_state_dict(torch.load(config.pretrained))
+        domain_discriminator = DomainDiscriminatorFC(
+            in_channels_list=get_encoder(
+                config.encoder, in_channels=config.in_channels
+            ).out_channels,
+            hidden_dim=config.hidden_dim,
+            num_domains=2,
+        ).to(device)
+        model = ModelWithDomainAdaptation(
+            segmentation_model, config.lambda_param, domain_discriminator
+        ).to(device)
         criterion_segmentation = build_criterion(config.loss)
-        optimizer = build_optimizer(model, learning_rate=config.learning_rate, optimizer=config.optimizer)
-        train_loss, val_loss_source, val_loss_target = train_and_validate(
+        optimizer = build_optimizer(
+            model, learning_rate=config.learning_rate, optimizer=config.optimizer
+        )
+        train_loss, domain_loss, val_loss_source, val_loss_target = train_and_validate(
             model,
             trainloader_source,
             validationloader_source,
@@ -46,7 +68,7 @@ def model_pipeline(
             if config.model:
                 model.load_state_dict(torch.load(f"./models/{config.model}.pth"))
             evaluate_model(model, testloader_target, device)
-        return model, train_loss, val_loss_source, val_loss_target
+        return model, train_loss, domain_loss, val_loss_source, val_loss_target
 
 
 def train_and_validate(
@@ -64,7 +86,7 @@ def train_and_validate(
     batch_print=10,
     with_overlays=False,
 ):
-    train_losses, val_losses_source, val_losses_target = [], [], []
+    train_losses, domain_losses, val_losses_source, val_losses_target = [], [], [], []
     highest_dice = 0
     wandb.watch(model, criterion_segmentation, log="all", log_freq=10)
 
@@ -85,6 +107,7 @@ def train_and_validate(
         model.train()
         running_loss = 0.0
         train_loss = 0.0
+        domain_loss = 0.0
 
         for batch_idx in range(num_batches):
             # Segmentation Training Step
@@ -102,8 +125,12 @@ def train_and_validate(
             _, domain_output_target = model(inputs_target)
 
             # Create domain labels: source=0 , target=1
-            domain_labels_source = torch.ones(inputs_source.size(0), dtype=torch.long).to(device)
-            domain_labels_target = torch.zeros(inputs_target.size(0), dtype=torch.long).to(device)
+            domain_labels_source = torch.ones(
+                inputs_source.size(0), dtype=torch.long
+            ).to(device)
+            domain_labels_target = torch.zeros(
+                inputs_target.size(0), dtype=torch.long
+            ).to(device)
 
             # Compute segmentation loss
             loss_segmentation = criterion_segmentation(
@@ -129,6 +156,7 @@ def train_and_validate(
             # Update running losses
             running_loss += loss_total.item()
             train_loss += loss_total.item()
+            domain_loss += loss_domain.item()
 
             if (batch_idx + 1) % batch_print == 0:
                 print(
@@ -138,9 +166,14 @@ def train_and_validate(
 
         # Calculate and print the average loss per epoch
         train_loss = train_loss / num_batches
+        domain_loss = domain_loss / num_batches
         train_losses.append(train_loss)
+        domain_losses.append(domain_loss)
         print(f"Epoch {epoch+1}, Train Loss: {train_loss:.4f}")
         wandb.log({"epoch": epoch + 1, "train/loss": train_loss}, step=epoch + 1)
+        wandb.log(
+            {"epoch": epoch + 1, "train/domain_loss": domain_loss}, step=epoch + 1
+        )
 
         # Validation phase
         model.eval()
@@ -167,9 +200,14 @@ def train_and_validate(
                     log_segmentation_example(
                         model, data, device, epoch, title="Validation Overlay FIVES"
                     )
-
         val_loss_source = val_running_loss_source / len(validationloader_source)
         val_loss_target = val_running_loss_target / len(testloader_target)
+        wandb.log(
+            {"epoch": epoch + 1, "val/loss_source": val_loss_source}, step=epoch + 1
+        )
+        wandb.log(
+            {"epoch": epoch + 1, "val/loss_target": val_loss_target}, step=epoch + 1
+        )
 
         val_losses_source.append(val_loss_source)
         val_losses_target.append(val_loss_target)
@@ -196,14 +234,6 @@ def train_and_validate(
             f"Epoch {epoch+1}, Validation Loss Source: {val_loss_source:.4f}, Validation Loss Target: {val_loss_target:.4f}"
         )
         wandb.log(
-            {"epoch": epoch + 1, "validation/loss/source": val_losses_source},
-            step=epoch + 1,
-        )
-        wandb.log(
-            {"epoch": epoch + 1, "validation/loss/target": val_losses_target},
-            step=epoch + 1,
-        )
-        wandb.log(
             {"epoch": epoch + 1, "precision/source": precision_source}, step=epoch + 1
         )
         wandb.log(
@@ -216,4 +246,4 @@ def train_and_validate(
             {"epoch": epoch + 1, "dice_score/target": dice_score_target}, step=epoch + 1
         )
 
-    return train_losses, val_losses_source, val_losses_target
+    return train_losses, domain_losses, val_losses_source, val_losses_target

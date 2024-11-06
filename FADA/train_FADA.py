@@ -9,6 +9,7 @@ from FADA.classifier import Classifier
 from FADA.feature_extractor import FeatureExtractor
 from segmentation_util import log_segmentation_example, evaluate_model
 from segmentation_util import build_segmentation_model, build_criterion, build_optimizer
+from segmentation_models_pytorch.encoders import get_encoder
 
 
 def soft_label_cross_entropy(pred, soft_label, pixel_weights=None):
@@ -42,9 +43,11 @@ def model_pipeline(
             segmentation_model.load_state_dict(torch.load(config.pretrained))
         feature_extractor = FeatureExtractor(segmentation_model).to(device)
         classifier = Classifier(segmentation_model).to(device)
-        discriminator = PixelDiscriminator(input_nc=config.input_nc, num_classes=1).to(
-            device
-        )
+        discriminator = PixelDiscriminator(
+            input_nc=get_encoder(config.encoder, config.in_channels).out_channels[-1],
+            ndf=config.ndf,
+            num_classes=1,
+        ).to(device)
 
         criterion_segmentation = build_criterion(config.seg_loss)
         optimizer_fea = build_optimizer(
@@ -63,7 +66,7 @@ def model_pipeline(
             optimizer=config.optimizer,
         )
 
-        train_loss, val_loss_source, val_loss_target = train_and_validate(
+        train_loss, domain_loss, val_loss_source, val_loss_target = train_and_validate(
             feature_extractor,
             classifier,
             discriminator,
@@ -88,7 +91,7 @@ def model_pipeline(
                 model.load_state_dict(torch.load(f"./models/{config.model}.pth"))
 
             evaluate_model(model, testloader_target, device)
-        return model, train_loss, val_loss_source, val_loss_target
+        return model, train_loss, domain_loss, val_loss_source, val_loss_target
 
 
 def train_and_validate(
@@ -110,7 +113,7 @@ def train_and_validate(
     batch_print=10,
     with_overlays=False,
 ):
-    train_losses, val_losses_source, val_losses_target = [], [], []
+    train_losses, domain_losses, val_losses_source, val_losses_target = [], [], [], []
     highest_dice = 0
 
     # Create infinite iterators
@@ -130,6 +133,7 @@ def train_and_validate(
 
         running_loss = 0.0
         train_loss = 0.0
+        domain_loss = 0.0
 
         for batch_idx in range(num_batches):
             optimizer_fea.zero_grad()
@@ -203,6 +207,7 @@ def train_and_validate(
                 + loss_adv_tgt.item()
             )
             train_loss += running_loss
+            domain_loss += loss_D_src.item() + loss_D_tgt.item() + loss_adv_tgt.item()
 
             if (batch_idx + 1) % batch_print == 0:
                 print(
@@ -211,9 +216,14 @@ def train_and_validate(
                 running_loss = 0.0  # Reset running loss after printing
 
         train_loss = train_loss / num_batches
+        domain_loss = domain_loss / num_batches
         train_losses.append(train_loss)
+        domain_losses.append(domain_loss)
         print(f"Epoch {epoch+1}, Train Loss: {train_loss:.4f}")
         wandb.log({"epoch": epoch + 1, "train/loss": train_loss}, step=epoch + 1)
+        wandb.log(
+            {"epoch": epoch + 1, "train/domain_loss": domain_loss}, step=epoch + 1
+        )
 
         # Validation
         model = SegmentationModelFADA(feature_extractor, classifier).to(device)
@@ -245,6 +255,13 @@ def train_and_validate(
         val_loss_source = val_running_loss_source / len(validationloader_source)
         val_loss_target = val_running_loss_target / len(testloader_target)
 
+        wandb.log(
+            {"epoch": epoch + 1, "val/loss_source": val_loss_source}, step=epoch + 1
+        )
+        wandb.log(
+            {"epoch": epoch + 1, "val/loss_target": val_loss_target}, step=epoch + 1
+        )
+
         val_losses_source.append(val_loss_source)
         val_losses_target.append(val_loss_target)
 
@@ -270,14 +287,6 @@ def train_and_validate(
             f"Epoch {epoch+1}, Validation Loss Source: {val_loss_source:.4f}, Validation Loss Target: {val_loss_target:.4f}"
         )
         wandb.log(
-            {"epoch": epoch + 1, "validation/loss/source": val_losses_source},
-            step=epoch + 1,
-        )
-        wandb.log(
-            {"epoch": epoch + 1, "validation/loss/target": val_losses_target},
-            step=epoch + 1,
-        )
-        wandb.log(
             {"epoch": epoch + 1, "precision/source": precision_source}, step=epoch + 1
         )
         wandb.log(
@@ -292,4 +301,4 @@ def train_and_validate(
 
         del model
 
-    return train_losses, val_losses_source, val_losses_target
+    return train_losses, domain_losses, val_losses_source, val_losses_target

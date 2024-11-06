@@ -1,5 +1,4 @@
 import torch
-from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
 from PIL import Image
 import os
@@ -7,8 +6,7 @@ import spectral
 import numpy as np
 import cv2
 import random
-from torch.utils.data import DataLoader, random_split, ConcatDataset, Subset
-import os
+from torch.utils.data import DataLoader, ConcatDataset, Subset, Dataset
 from torchvision.transforms import (
     Compose,
     ToTensor,
@@ -19,8 +17,6 @@ from torchvision.transforms import (
     InterpolationMode,
     CenterCrop,
 )
-import torch
-import numpy as np
 import matplotlib.pyplot as plt
 
 spectral.settings.envi_support_nonlowercase_params = True
@@ -84,6 +80,7 @@ class HSIDataset(Dataset):
         window=None,
         with_gt=False,
         exclude_labeled_data=False,
+        augmentation=None,
     ):
         """
         Initialize the dataset with the path to the data.
@@ -98,6 +95,7 @@ class HSIDataset(Dataset):
         self.window = window
         self.with_gt = with_gt
         labeled_data = ["004-02", "012-02", "021-01", "027-02", "030-02"]
+        self.augmentation = augmentation
 
         subdirs = os.listdir(root_dir)
         if exclude_labeled_data:
@@ -180,6 +178,10 @@ class HSIDataset(Dataset):
 
         # Convert to PyTorch tensors
         hsi_image = torch.tensor(hsi_image, dtype=torch.float32)
+        
+        if self.augmentation:
+            hsi_image, label = self.augmentation(hsi_image, label)
+        
 
         if self.image_transform and self.label_transform:
             hsi_image = self.image_transform(hsi_image)
@@ -236,13 +238,12 @@ class HSIDataset(Dataset):
 
         return mean, std
 
-    def normalize_dataset(self):
+    def crop_dataset(self):
         """
         Normalize the dataset using the given mean and standard deviation.
         Args:
         """
 
-        mean, std = self.get_mean_std()
         self.image_transform = transforms.Compose(
             [
                 transforms.CenterCrop(224),
@@ -504,7 +505,7 @@ def build_FIVES_dataloaders(
     return trainloader, validationloader, testloader
 
 
-def create_montage(dataset, num_images=10):
+def create_montage(dataset, num_images=10, show_windowed=False):
     # Define the number of images you want to show in the montage
     num_images = min(num_images, len(dataset))
 
@@ -512,15 +513,27 @@ def create_montage(dataset, num_images=10):
 
     for i in range(num_images):
         sample = dataset[i]
-        image, label = sample[2], sample[1]
+        if len(sample) == 2 or show_windowed:
+            image, label = sample[0], sample[1].float()
+            image = image.cpu().numpy().squeeze()
+            label = label.cpu().numpy().squeeze()
+            
+            if image.shape[0] == 1:  # Grayscale (single channel)
+                image = np.stack(
+                    [image, image, image], axis=-1
+                )  # Convert to 3-channel grayscale RGB
+            elif image.shape[0] == 3:  # RGB image
+                image = image.transpose(1, 2, 0)  # Convert to HWC format 
+        else:
+            image, label = sample[2], sample[1]
 
-        # Convert image and label to numpy arrays for plotting
-        if isinstance(image, torch.Tensor):
-            image = image.numpy().transpose(1, 2, 0)
-        if isinstance(label, torch.Tensor):
-            label = label.numpy().squeeze()
-            overlay = np.zeros_like(image)
-            overlay[label == 1] = [0, 255, 0]
+            # Convert image and label to numpy arrays for plotting
+            if isinstance(image, torch.Tensor):
+                image = image.numpy().transpose(1, 2, 0)
+            if isinstance(label, torch.Tensor):
+                label = label.numpy().squeeze()
+                overlay = np.zeros_like(image)
+                overlay[label == 1] = [0, 255, 0]
 
         # Plot the image
         axes[i, 0].imshow(image)
@@ -543,11 +556,12 @@ def build_hsi_dataloader(
     batch_size=8,
     window=None,
     exclude_labeled_data=False,
+    augmented=False,
 ):
     path = "../../ivan/HELICoiD/HSI_Human_Brain_Database_IEEE_Access/"
 
     dataset = HSIDataset(path, window=window, exclude_labeled_data=exclude_labeled_data)
-    dataset.normalize_dataset()
+    dataset.crop_dataset()
 
     total_samples = len(dataset)
 
@@ -559,6 +573,18 @@ def build_hsi_dataloader(
     train_size = int(train_split * total_samples)
     val_size = int(val_split * total_samples)
     test_size = total_samples - train_size - val_size  # Ensure all samples are used
+
+    augmentation = v2.RandomApply(
+        [
+            v2.RandomHorizontalFlip(p=0.5),
+            v2.RandomVerticalFlip(p=0.5),
+            v2.RandomRotation(degrees=90),
+            v2.RandomAffine(degrees=0, translate=(0.1, 0.1), scale=(0.9, 1.1)),
+        ]
+    )
+    augmented_dataset = HSIDataset(path, window=window, exclude_labeled_data=exclude_labeled_data, augmentation=augmentation)
+    augmented_dataset.crop_dataset()
+    
 
     # Generate shuffled indices for the dataset
     indices = list(range(total_samples))
@@ -575,6 +601,9 @@ def build_hsi_dataloader(
     testset = Subset(dataset, test_indices)
 
     # Create DataLoaders for each subset
+    if augmented:
+        trainset = ConcatDataset([trainset, augmented_dataset])
+        
     trainloader = DataLoader(trainset, batch_size=batch_size, shuffle=True)
     validationloader = DataLoader(valset, batch_size=batch_size, shuffle=False)
     testloader = DataLoader(testset, batch_size=batch_size, shuffle=False)

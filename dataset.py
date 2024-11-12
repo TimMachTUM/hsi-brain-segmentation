@@ -178,10 +178,9 @@ class HSIDataset(Dataset):
 
         # Convert to PyTorch tensors
         hsi_image = torch.tensor(hsi_image, dtype=torch.float32)
-        
+
         if self.augmentation:
             hsi_image, label = self.augmentation(hsi_image, label)
-        
 
         if self.image_transform and self.label_transform:
             hsi_image = self.image_transform(hsi_image)
@@ -354,7 +353,7 @@ class SegmentationDatasetWithRandomCrops(Dataset):
         ), "Image and mask must have the same dimensions."
 
         height, width = image.shape[:2]
-        for _ in range(100):  # Try up to 100 times to find a valid crop
+        for _ in range(1000):  # Try up to 100 times to find a valid crop
             x = random.randint(0, width - crop_width)
             y = random.randint(0, height - crop_height)
             cropped_image = image[y : y + crop_height, x : x + crop_width]
@@ -374,6 +373,103 @@ class SegmentationDatasetWithRandomCrops(Dataset):
         ]
 
         return center_cropped_image, center_cropped_mask
+
+
+def build_FIVES_random_crops_dataloaders(
+    batch_size=8,
+    num_channels=1,
+    proportion_bloodvessels=0.1,
+    width=512,
+    height=512,
+    load_from_path=None
+):
+    train_image_path = "./FIVES/train/Original"
+    train_label_path = "./FIVES/train/GroundTruth"
+    test_image_path = "./FIVES/test/Original"
+    test_label_path = "./FIVES/test/GroundTruth"
+    np.random.seed(42)
+
+    if num_channels == 1:
+        image_transform = Compose(
+            [Grayscale(num_output_channels=1), ToTensor()]
+        )
+
+    else:
+        image_transform = Compose([ToTensor()])
+    label_transform = Compose([ToTensor()])
+    
+    if load_from_path is None:
+        random_crop_dataset = SegmentationDatasetWithRandomCrops(
+            train_image_path,
+            train_label_path,
+            image_transform,
+            label_transform,
+            crop_width=width,
+            crop_height=height,
+            threshold=proportion_bloodvessels,
+        )
+
+        testset = SegmentationDatasetWithRandomCrops(
+            test_image_path,
+            test_label_path,
+            image_transform,
+            label_transform,
+            crop_width=width,
+            crop_height=height,
+            threshold=proportion_bloodvessels,
+        )
+
+        # Prepare DataLoader
+        train_size = int(0.9 * len(random_crop_dataset))
+        train_indices = np.random.choice(
+            len(random_crop_dataset), train_size, replace=False
+        )
+        val_indices = np.setdiff1d(np.arange(len(random_crop_dataset)), train_indices)
+
+        train_dataset = Subset(random_crop_dataset, train_indices)
+        val_dataset = Subset(random_crop_dataset, val_indices)
+        
+    else:
+        train_path = os.path.join(load_from_path, "train")
+        val_path = os.path.join(load_from_path, "validation")
+        test_path = os.path.join(load_from_path, "test")
+        
+        train_dataset = SegmentationDataset(
+            os.path.join(train_path, "Original"),
+            os.path.join(train_path, "GroundTruth"),
+            image_transform,
+            label_transform,
+        )
+        
+        val_dataset = SegmentationDataset(
+            os.path.join(val_path, "Original"),
+            os.path.join(val_path, "GroundTruth"),
+            image_transform,
+            label_transform,
+        )
+        
+        testset = SegmentationDataset(
+            os.path.join(test_path, "Original"),
+            os.path.join(test_path, "GroundTruth"),
+            image_transform,
+            label_transform
+        )
+    trainloader = DataLoader(
+        train_dataset, batch_size=batch_size, shuffle=True, num_workers=8
+    )
+    validationloader = DataLoader(
+        val_dataset, batch_size=batch_size, shuffle=False, num_workers=8
+    )
+    testloader = DataLoader(
+        testset, batch_size=batch_size, shuffle=False, num_workers=8
+    )
+    
+    print(
+        f"Number of samples in the training set: {len(train_dataset)}, validation set: {len(val_dataset)}"
+    )
+    print(f"Number of samples in the test set: {len(testset)}")
+
+    return trainloader, validationloader, testloader
 
 
 def build_FIVES_dataloaders(
@@ -510,6 +606,7 @@ def create_montage(dataset, num_images=10, show_windowed=False):
     num_images = min(num_images, len(dataset))
 
     fig, axes = plt.subplots(num_images, 2, figsize=(10, num_images * 5))
+    cmap = None
 
     for i in range(num_images):
         sample = dataset[i]
@@ -517,13 +614,14 @@ def create_montage(dataset, num_images=10, show_windowed=False):
             image, label = sample[0], sample[1].float()
             image = image.cpu().numpy().squeeze()
             label = label.cpu().numpy().squeeze()
-            
+
             if image.shape[0] == 1:  # Grayscale (single channel)
                 image = np.stack(
                     [image, image, image], axis=-1
                 )  # Convert to 3-channel grayscale RGB
+                cmap = "gray"
             elif image.shape[0] == 3:  # RGB image
-                image = image.transpose(1, 2, 0)  # Convert to HWC format 
+                image = image.transpose(1, 2, 0)  # Convert to HWC format
         else:
             image, label = sample[2], sample[1]
 
@@ -536,7 +634,7 @@ def create_montage(dataset, num_images=10, show_windowed=False):
                 overlay[label == 1] = [0, 255, 0]
 
         # Plot the image
-        axes[i, 0].imshow(image)
+        axes[i, 0].imshow(image, cmap=cmap)
         axes[i, 0].axis("off")
         axes[i, 0].set_title("Image {i}".format(i=i))
 
@@ -582,9 +680,13 @@ def build_hsi_dataloader(
             v2.RandomAffine(degrees=0, translate=(0.1, 0.1), scale=(0.9, 1.1)),
         ]
     )
-    augmented_dataset = HSIDataset(path, window=window, exclude_labeled_data=exclude_labeled_data, augmentation=augmentation)
+    augmented_dataset = HSIDataset(
+        path,
+        window=window,
+        exclude_labeled_data=exclude_labeled_data,
+        augmentation=augmentation,
+    )
     augmented_dataset.crop_dataset()
-    
 
     # Generate shuffled indices for the dataset
     indices = list(range(total_samples))
@@ -603,7 +705,7 @@ def build_hsi_dataloader(
     # Create DataLoaders for each subset
     if augmented:
         trainset = ConcatDataset([trainset, augmented_dataset])
-        
+
     trainloader = DataLoader(trainset, batch_size=batch_size, shuffle=True)
     validationloader = DataLoader(valset, batch_size=batch_size, shuffle=False)
     testloader = DataLoader(testset, batch_size=batch_size, shuffle=False)

@@ -711,3 +711,40 @@ def build_hsi_dataloader(
     testloader = DataLoader(testset, batch_size=batch_size, shuffle=False)
 
     return trainloader, validationloader, testloader
+
+def _get_ratio(label):
+    count_ones = torch.sum(label==1).item()
+    total_elements = label.numel()
+    return count_ones/total_elements
+
+def save_random_crops_dataset_to_path(trainset, valset, testset, path, threshold):
+    train_path = os.path.join(path, "train")
+    val_path = os.path.join(path, "validation")
+    test_path = os.path.join(path, "test")
+    
+    for i, data in enumerate(trainset):
+        bloodvessel_ratio = _get_ratio(data[1])
+        if bloodvessel_ratio >= threshold:
+            img = transforms.ToPILImage()(data[0])
+            img.save(f"{train_path}/Original/{i}.png")
+            label = transforms.ToPILImage()(data[1])
+            label.save(f"{train_path}/GroundTruth/{i}.png")
+            print(f"Bloodvessel ratio: {bloodvessel_ratio}, Image {i} saved")
+    
+    for i, data in enumerate(valset):
+        bloodvessel_ratio = _get_ratio(data[1])
+        if bloodvessel_ratio >= threshold:
+            img = transforms.ToPILImage()(data[0])
+            img.save(f"{val_path}/Original/{i}.png")
+            label = transforms.ToPILImage()(data[1])
+            label.save(f"{val_path}/GroundTruth/{i}.png")
+            print(f"Bloodvessel ratio: {bloodvessel_ratio}, Image {i} saved")
+            
+    for i, data in enumerate(testset):
+        bloodvessel_ratio = _get_ratio(data[1])
+        if bloodvessel_ratio >= threshold:
+            img = transforms.ToPILImage()(data[0])
+            img.save(f"{test_path}/Original/{i}.png")
+            label = transforms.ToPILImage()(data[1])
+            label.save(f"{test_path}/GroundTruth/{i}.png")
+            print(f"Bloodvessel ratio: {bloodvessel_ratio}, Image {i} saved")

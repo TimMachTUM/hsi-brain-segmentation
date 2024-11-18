@@ -147,7 +147,7 @@ def get_unsupervised_model(device):
     model = SegmentationModelFADA(feature_extractor, classifier)
     model.load_state_dict(
         torch.load(
-            "models/FADA-Linknet-timm-regnetx_320-window_500-600_pretrained-augmented_target-random_crops_bloodvessel_ratio01.pth"
+            "models/FADA-Linknet-timm-regnetx_320-window_500-600_pretrained-augmented_target-random_crops_bloodvessel_ratio01-unsupervised.pth"
         )
     )
     return model

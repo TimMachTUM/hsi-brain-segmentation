@@ -7,9 +7,15 @@ from FADA.segmentation_model import SegmentationModelFADA
 from FADA.discriminator import PixelDiscriminator
 from FADA.classifier import Classifier
 from FADA.feature_extractor import FeatureExtractor
+from dataset import (
+    HSIDataset,
+    build_FIVES_random_crops_dataloaders,
+    build_hsi_dataloader,
+)
 from segmentation_util import log_segmentation_example, evaluate_model
 from segmentation_util import build_segmentation_model, build_criterion, build_optimizer
 from segmentation_models_pytorch.encoders import get_encoder
+from torch.utils.data import DataLoader, Subset
 
 
 def soft_label_cross_entropy(pred, soft_label, pixel_weights=None):
@@ -36,64 +42,115 @@ def model_pipeline(
 ):
     with wandb.init(project=project, config=config, name=config["model"]):
         config = wandb.config
-        segmentation_model = build_segmentation_model(
-            config.encoder, config.architecture, device
-        )
-        if "pretrained" in config:
-            print(f"Loading pretrained model from {config.pretrained}")
-            segmentation_model.load_state_dict(torch.load(config.pretrained))
-        feature_extractor = FeatureExtractor(segmentation_model).to(device)
-        classifier = Classifier(segmentation_model).to(device)
-        discriminator = PixelDiscriminator(
-            input_nc=get_encoder(config.encoder, config.in_channels).out_channels[-1],
-            ndf=config.ndf,
-            num_classes=1,
-        ).to(device)
-
-        criterion_segmentation = build_criterion(config.seg_loss)
-        optimizer_fea = build_optimizer(
-            feature_extractor,
-            learning_rate=config.learning_rate_fea,
-            optimizer=config.optimizer,
-        )
-        optimizer_cls = build_optimizer(
-            classifier,
-            learning_rate=config.learning_rate_cls,
-            optimizer=config.optimizer,
-        )
-        optimizer_dis = build_optimizer(
-            discriminator,
-            learning_rate=config.learning_rate_dis,
-            optimizer=config.optimizer,
-        )
-
-        train_loss, domain_loss, val_loss_source, val_loss_target = train_and_validate(
-            feature_extractor,
-            classifier,
-            discriminator,
+        return init_model_and_train(
             trainloader_source,
             validationloader_source,
             testloader_source,
             trainloader_target_labeled,
             trainloader_target_unlabeled,
             testloader_target,
-            criterion_segmentation,
-            optimizer_fea,
-            optimizer_cls,
-            optimizer_dis,
-            epochs=config.epochs,
-            model_name=config.model,
-            device=device,
-            batch_print=batch_print,
-            with_overlays=with_overlays,
+            config,
+            device,
+            batch_print,
+            evaluate,
+            with_overlays,
         )
-        if evaluate:
-            if config.model:
-                model = SegmentationModelFADA(feature_extractor, classifier)
-                model.load_state_dict(torch.load(f"./models/{config.model}.pth"))
 
-            evaluate_model(model, testloader_target, device)
-        return model, train_loss, domain_loss, val_loss_source, val_loss_target
+
+def init_model_and_train(
+    trainloader_source,
+    validationloader_source,
+    testloader_source,
+    trainloader_target_labeled,
+    trainloader_target_unlabeled,
+    testloader_target,
+    config,
+    device,
+    batch_print,
+    evaluate,
+    with_overlays,
+):
+    segmentation_model = build_segmentation_model(
+        config.encoder, config.architecture, device
+    )
+    if "pretrained" in config:
+        print(f"Loading pretrained model from {config.pretrained}")
+        segmentation_model.load_state_dict(torch.load(config.pretrained))
+    feature_extractor = FeatureExtractor(segmentation_model).to(device)
+    classifier = Classifier(segmentation_model).to(device)
+    discriminator = PixelDiscriminator(
+        input_nc=get_encoder(config.encoder, config.in_channels).out_channels[-1],
+        ndf=config.ndf,
+        num_classes=1,
+    ).to(device)
+
+    criterion_segmentation = build_criterion(config.seg_loss)
+    optimizer_fea = build_optimizer(
+        feature_extractor,
+        learning_rate=config.learning_rate_fea,
+        optimizer=config.optimizer,
+    )
+    optimizer_cls = build_optimizer(
+        classifier,
+        learning_rate=config.learning_rate_cls,
+        optimizer=config.optimizer,
+    )
+    optimizer_dis = build_optimizer(
+        discriminator,
+        learning_rate=config.learning_rate_dis,
+        optimizer=config.optimizer,
+    )
+
+    train_loss, domain_loss, val_loss_source, val_loss_target = train_and_validate(
+        feature_extractor,
+        classifier,
+        discriminator,
+        trainloader_source,
+        validationloader_source,
+        testloader_source,
+        trainloader_target_labeled,
+        trainloader_target_unlabeled,
+        testloader_target,
+        criterion_segmentation,
+        optimizer_fea,
+        optimizer_cls,
+        optimizer_dis,
+        epochs=config.epochs,
+        model_name=config.model,
+        train_indices=config.train_indices,
+        device=device,
+        batch_print=batch_print,
+        with_overlays=with_overlays,
+    )
+    if evaluate:
+        if config.model:
+            model = SegmentationModelFADA(feature_extractor, classifier)
+            model.load_state_dict(torch.load(f"./models/{config.model}.pth"))
+
+        evaluate_model(model, testloader_target, device)
+        print("compare performance with unsupervised Approach")
+        unsupervised_model = get_unsupervised_model(device)
+        precision_unsupervised, _, _, _, dice_score_unsupervised= evaluate_model(unsupervised_model, testloader_target, device, with_wandb=False)
+        wandb.log({"test/precision_unsupervised": precision_unsupervised})
+        wandb.log({"test/dice_score_unsupervised": dice_score_unsupervised})
+        del unsupervised_model
+        
+    return model, train_loss, domain_loss, val_loss_source, val_loss_target
+
+
+def get_unsupervised_model(device):
+    segmentation_model = build_segmentation_model(
+        "timm-regnetx_320", "Linknet", device, in_channels=1
+    )
+    feature_extractor = FeatureExtractor(segmentation_model).to(device)
+    classifier = Classifier(segmentation_model).to(device)
+    model = SegmentationModelFADA(feature_extractor, classifier)
+    model.load_state_dict(
+        torch.load(
+            "models/FADA-Linknet-timm-regnetx_320-window_500-600_pretrained-augmented_target-random_crops_bloodvessel_ratio01.pth"
+        )
+    )
+    return model
 
 
 def train_and_validate(
@@ -110,6 +167,7 @@ def train_and_validate(
     optimizer_fea,
     optimizer_cls,
     optimizer_D,
+    train_indices,
     epochs=10,
     model_name=None,
     device="cuda",
@@ -166,14 +224,14 @@ def train_and_validate(
             src_pred = classifier(src_features)
             temperature = 1.8
             src_pred = src_pred.div(temperature)
-            
+
             tgt_features_labeled = feature_extractor(tgt_input_labeled)
             tgt_pred_labeled = classifier(tgt_features_labeled)
             tgt_pred_labeled = tgt_pred_labeled.div(temperature)
-            
+
             combined_pred = torch.cat((src_pred, tgt_pred_labeled), dim=0)
             combined_label = torch.cat((src_label, tgt_label), dim=0)
-            
+
             loss_seg = criterion_segmentation(combined_pred, combined_label)
             loss_seg.backward()
 
@@ -247,6 +305,7 @@ def train_and_validate(
         model.eval()
         val_running_loss_target = 0.0
         val_running_loss_source = 0.0
+        val_indices = list({0, 1, 2, 3, 4} - set(train_indices))
         with torch.no_grad():
             # Validation Phase on target data
             for i, data in enumerate(testloader_target):
@@ -255,7 +314,11 @@ def train_and_validate(
                 loss = criterion_segmentation(outputs, labels)
                 val_running_loss_target += loss.item()
                 log_segmentation_example(
-                    model, data, device, epoch, title=f"Validation Overlay HSI {i}"
+                    model,
+                    data,
+                    device,
+                    epoch,
+                    title=f"Validation Overlay HSI {val_indices[i]}",
                 )
 
             # validation phase on source data
@@ -319,3 +382,57 @@ def train_and_validate(
         del model
 
     return train_losses, domain_losses, val_losses_source, val_losses_target
+
+
+def train_sweep(config=None):
+    with wandb.init(config=config) as run:
+        config = wandb.config
+        trainloader_source, validationloader_source, testloader_source = (
+            build_FIVES_random_crops_dataloaders(
+                batch_size=config.batch_size_source,
+                num_channels=config.in_channels,
+                load_from_path=config.dataset_path,
+            )
+        )
+        window = config.window
+        trainloader_target_unlabeled = build_hsi_dataloader(
+            batch_size=config.batch_size_target,
+            train_split=1,
+            val_split=0,
+            test_split=0,
+            window=window,
+            exclude_labeled_data=True,
+            augmented=config.augmented,
+        )[0]
+        
+        path = "./data/helicoid_with_labels"
+        testset = HSIDataset(path, with_gt=True, window=window)
+        testset.crop_dataset()
+
+        trainloader_target_labeled = DataLoader(
+            Subset(testset, config.train_indices),
+            batch_size=1,
+            shuffle=True,
+        )
+        testloader_target = DataLoader(
+            Subset(testset, list({0, 1, 2, 3, 4} - set(config.train_indices))),
+            batch_size=1,
+            shuffle=False,
+        )
+
+        config["model"] = run.name
+        model, _, _, _, _ = init_model_and_train(
+            trainloader_source=trainloader_source,
+            validationloader_source=validationloader_source,
+            testloader_source=testloader_source,
+            trainloader_target_labeled=trainloader_target_labeled,
+            trainloader_target_unlabeled=trainloader_target_unlabeled,
+            testloader_target=testloader_target,
+            config=config,
+            device=config.device,
+            batch_print=10,
+            evaluate=True,
+            with_overlays=True,
+        )
+        del model
+        torch.cuda.empty_cache()

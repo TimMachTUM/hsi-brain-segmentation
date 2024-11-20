@@ -16,6 +16,7 @@ from torchvision.transforms import (
     Normalize,
     InterpolationMode,
     CenterCrop,
+    GaussianBlur,
 )
 import matplotlib.pyplot as plt
 
@@ -381,7 +382,9 @@ def build_FIVES_random_crops_dataloaders(
     proportion_bloodvessels=0.1,
     width=512,
     height=512,
-    load_from_path=None
+    load_from_path=None,
+    kernel_size=None,
+    sigma=None,
 ):
     train_image_path = "./FIVES/train/Original"
     train_label_path = "./FIVES/train/GroundTruth"
@@ -389,15 +392,16 @@ def build_FIVES_random_crops_dataloaders(
     test_label_path = "./FIVES/test/GroundTruth"
     np.random.seed(42)
 
+    transforms_list = [Grayscale(num_output_channels=1), ToTensor()]
     if num_channels == 1:
-        image_transform = Compose(
-            [Grayscale(num_output_channels=1), ToTensor()]
-        )
+        if kernel_size and sigma:
+            transforms_list.append(GaussianBlur(kernel_size, sigma))
+        image_transform = Compose(transforms_list)
 
     else:
         image_transform = Compose([ToTensor()])
     label_transform = Compose([ToTensor()])
-    
+
     if load_from_path is None:
         random_crop_dataset = SegmentationDatasetWithRandomCrops(
             train_image_path,
@@ -428,31 +432,31 @@ def build_FIVES_random_crops_dataloaders(
 
         train_dataset = Subset(random_crop_dataset, train_indices)
         val_dataset = Subset(random_crop_dataset, val_indices)
-        
+
     else:
         train_path = os.path.join(load_from_path, "train")
         val_path = os.path.join(load_from_path, "validation")
         test_path = os.path.join(load_from_path, "test")
-        
+
         train_dataset = SegmentationDataset(
             os.path.join(train_path, "Original"),
             os.path.join(train_path, "GroundTruth"),
             image_transform,
             label_transform,
         )
-        
+
         val_dataset = SegmentationDataset(
             os.path.join(val_path, "Original"),
             os.path.join(val_path, "GroundTruth"),
             image_transform,
             label_transform,
         )
-        
+
         testset = SegmentationDataset(
             os.path.join(test_path, "Original"),
             os.path.join(test_path, "GroundTruth"),
             image_transform,
-            label_transform
+            label_transform,
         )
     trainloader = DataLoader(
         train_dataset, batch_size=batch_size, shuffle=True, num_workers=8
@@ -463,7 +467,7 @@ def build_FIVES_random_crops_dataloaders(
     testloader = DataLoader(
         testset, batch_size=batch_size, shuffle=False, num_workers=8
     )
-    
+
     print(
         f"Number of samples in the training set: {len(train_dataset)}, validation set: {len(val_dataset)}"
     )
@@ -712,16 +716,18 @@ def build_hsi_dataloader(
 
     return trainloader, validationloader, testloader
 
+
 def _get_ratio(label):
-    count_ones = torch.sum(label==1).item()
+    count_ones = torch.sum(label == 1).item()
     total_elements = label.numel()
-    return count_ones/total_elements
+    return count_ones / total_elements
+
 
 def save_random_crops_dataset_to_path(trainset, valset, testset, path, threshold):
     train_path = os.path.join(path, "train")
     val_path = os.path.join(path, "validation")
     test_path = os.path.join(path, "test")
-    
+
     for i, data in enumerate(trainset):
         bloodvessel_ratio = _get_ratio(data[1])
         if bloodvessel_ratio >= threshold:
@@ -730,7 +736,7 @@ def save_random_crops_dataset_to_path(trainset, valset, testset, path, threshold
             label = transforms.ToPILImage()(data[1])
             label.save(f"{train_path}/GroundTruth/{i}.png")
             print(f"Bloodvessel ratio: {bloodvessel_ratio}, Image {i} saved")
-    
+
     for i, data in enumerate(valset):
         bloodvessel_ratio = _get_ratio(data[1])
         if bloodvessel_ratio >= threshold:
@@ -739,7 +745,7 @@ def save_random_crops_dataset_to_path(trainset, valset, testset, path, threshold
             label = transforms.ToPILImage()(data[1])
             label.save(f"{val_path}/GroundTruth/{i}.png")
             print(f"Bloodvessel ratio: {bloodvessel_ratio}, Image {i} saved")
-            
+
     for i, data in enumerate(testset):
         bloodvessel_ratio = _get_ratio(data[1])
         if bloodvessel_ratio >= threshold:

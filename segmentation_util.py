@@ -100,7 +100,7 @@ def train_and_validate(
     return train_losses, val_losses
 
 
-def log_segmentation_example(model, data, device, epoch, title='Validation Overlay'):
+def log_segmentation_example(model, data, device, epoch, title="Validation Overlay"):
     inputs, labels = data[0][0], data[1][0].to(device).float()
     prediction = predict(model, inputs, device).squeeze(0).cpu().numpy()
 
@@ -143,11 +143,7 @@ def log_segmentation_example(model, data, device, epoch, title='Validation Overl
 
     # Log the image and masks using wandb
     wandb.log(
-        {
-            title: wandb.Image(
-                input_image, masks=mask_data, caption=f"Epoch {epoch+1}"
-            )
-        },
+        {title: wandb.Image(input_image, masks=mask_data, caption=f"Epoch {epoch+1}")},
         step=epoch + 1,
     )
 
@@ -229,7 +225,7 @@ def model_pipeline(
             model_name,
             device,
             batch_print,
-            with_overlays
+            with_overlays,
         )
         if evaluate:
             if model_name:
@@ -435,7 +431,7 @@ def build_optimizer(
 
 
 def train_sweep(config=None):
-    with wandb.init(config=config):
+    with wandb.init(config=config) as run:
         config = wandb.config
         encoder = config["encoder"]
         device = config["device"]
@@ -461,6 +457,8 @@ def train_sweep(config=None):
             batch_size=batch_size,
             proportion_augmented_data=proportion_augmented_data,
             num_channels=channels,
+            width=config["width"],
+            height=config["height"],
         )
 
         train_losses, val_losses = [], []
@@ -514,6 +512,9 @@ def train_sweep(config=None):
             )
             wandb.log({"epoch": epoch + 1, "precision": precision}, step=epoch + 1)
             wandb.log({"epoch": epoch + 1, "dice_score": dice_score}, step=epoch + 1)
+
+            if dice_score > 0.8:
+                torch.save(model.state_dict(), f"./models/{run.name}.pth")
 
         del model
         torch.cuda.empty_cache()

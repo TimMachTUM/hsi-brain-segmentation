@@ -3,26 +3,26 @@ import torch
 from segmentation_util import train_sweep
 import sys
 
-log_file = open('./out/hyperparameter_logs_3-channels.txt', 'w')
+log_file = open('./out/hyperparameter_logs.txt', 'w')
 sys.stdout = log_file
 wandb.login()
 
 sweep_config = {
-    'name': 'Fundus-Segmentation-Sweep-3-channels',
+    'name': '3-Channels-Sweep',
     'method': 'bayes',
     'parameters': {
         'encoder': {
-            'values': ['timm-resnest269e', 'timm-regnetx_320', 'timm-regnety_320', 'senet154']
+            'value': 'timm-regnetx_320'
         },
         'learning_rate': {
-            "min": 0.001, 
-            "max": 0.04
+            "min": 0.01, 
+            "max": 0.1
         },
         'epochs': {
-            'value': 10
+            'value': 15
         },
         'loss': {
-            'values': ['Dice', 'BCE']
+            'value': 'BCE' 
         },
         'optimizer': {
             'value': 'Adam'
@@ -34,10 +34,19 @@ sweep_config = {
             'value': 0.1
         },
         'architecture': {
-            'values': ['UnetPlusPlus', 'Linknet', 'Unet']
+            'value': 'Linknet',
         },
         'channels': {
             'value': 3
+        },
+        'gamma': {
+            'value': [2,3,4]
+        },
+        'width': {
+            'value': 512
+        },
+        'height': {
+            'value': 512
         },
     },
     'metric': {
@@ -48,7 +57,7 @@ sweep_config = {
 
 sweep_config['parameters']['device'] = {'value':'cuda:2' if torch.cuda.is_available() else 'cpu'}
 sweep_id = wandb.sweep(sweep_config, project='fundus-segmentation')
-wandb.agent(sweep_id, function=train_sweep, count=20)
+wandb.agent(sweep_id, function=train_sweep, count=10)
 
 sys.stdout = sys.__stdout__
 log_file.close()

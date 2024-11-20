@@ -491,25 +491,27 @@ def build_FIVES_dataloaders(
     np.random.seed(42)
 
     # Define transformations for images
-    normalization = (
-        Normalize(mean=[0.3728, 0.1666, 0.0678], std=[0.1924, 0.0956, 0.0395])
-        if num_channels == 3
-        else Normalize(mean=[0.2147], std=[0.1163])
+    # normalization = (
+    #     Normalize(mean=[0.3728, 0.1666, 0.0678], std=[0.1924, 0.0956, 0.0395])
+    #     if num_channels == 3
+    #     else Normalize(mean=[0.2147], std=[0.1163])
+    # )
+    random_crop_transform_list = []
+    transforms_list = []
+    if num_channels == 1:
+        transforms_list.append(Grayscale(num_output_channels=1))
+        random_crop_transform_list.append(Grayscale(num_output_channels=1))
+
+    random_crop_transform_list.append(ToTensor())
+    transforms_list.append(
+        (
+            CenterCrop((width, height))
+            if cropped
+            else Resize((width, height), interpolation=InterpolationMode.BICUBIC)
+        ),  # Resize images to 512x512
     )
-    image_transform = Compose(
-        [
-            Grayscale(
-                num_output_channels=num_channels
-            ),  # Convert the image to grayscale
-            (
-                CenterCrop((width, height))
-                if cropped
-                else Resize((width, height), interpolation=InterpolationMode.BICUBIC)
-            ),  # Resize images to 512x512
-            ToTensor(),  # Convert the image to a PyTorch tensor
-            normalization,
-        ]
-    )
+    transforms_list.append(ToTensor())
+    image_transform = Compose(transforms_list)
 
     # Define transformations for labels, if needed
     label_transform = Compose(
@@ -534,9 +536,8 @@ def build_FIVES_dataloaders(
         ]
     )
 
-    random_crop_image_transform = Compose(
-        [Grayscale(num_output_channels=num_channels), ToTensor()]
-    )
+    random_crop_image_transform = Compose(random_crop_transform_list)
+
     random_crop_label_transform = Compose([ToTensor()])
 
     random_crop_dataset = SegmentationDatasetWithRandomCrops(

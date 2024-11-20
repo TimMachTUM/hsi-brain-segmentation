@@ -82,6 +82,7 @@ class HSIDataset(Dataset):
         with_gt=False,
         exclude_labeled_data=False,
         augmentation=None,
+        with_img=True,
     ):
         """
         Initialize the dataset with the path to the data.
@@ -95,6 +96,7 @@ class HSIDataset(Dataset):
         self.image_transform = image_transform
         self.window = window
         self.with_gt = with_gt
+        self.with_img = with_img
         labeled_data = ["004-02", "012-02", "021-01", "027-02", "030-02"]
         self.augmentation = augmentation
 
@@ -160,9 +162,6 @@ class HSIDataset(Dataset):
             label = (label.transpose(2, 0, 1) == 3).astype(int)
             label = torch.tensor(label, dtype=torch.int8)
 
-        img = cv2.imread(img_path, cv2.IMREAD_UNCHANGED)
-        img = img[:, :, [2, 1, 0]]
-
         hsi_image = (hsi_image - dark_full) / (white_full - dark_full)
         hsi_image[hsi_image <= 0] = 10**-2
         hsi_image = hsi_image.transpose(2, 0, 1)
@@ -186,9 +185,14 @@ class HSIDataset(Dataset):
         if self.image_transform and self.label_transform:
             hsi_image = self.image_transform(hsi_image)
             label = self.label_transform(label)
-            img = self.center_crop(img, (224, 224))
 
-        return hsi_image, label, img
+        if self.with_img:
+            img = cv2.imread(img_path, cv2.IMREAD_UNCHANGED)
+            img = img[:, :, [2, 1, 0]]
+            img = self.center_crop(img, (224, 224))
+            return hsi_image, label, img
+
+        return hsi_image, label
 
     def get_window_from_wavelengths(self, wavelengths):
         """
@@ -663,7 +667,9 @@ def build_hsi_dataloader(
 ):
     path = "../../ivan/HELICoiD/HSI_Human_Brain_Database_IEEE_Access/"
 
-    dataset = HSIDataset(path, window=window, exclude_labeled_data=exclude_labeled_data)
+    dataset = HSIDataset(
+        path, window=window, exclude_labeled_data=exclude_labeled_data, with_img=False
+    )
     dataset.crop_dataset()
 
     total_samples = len(dataset)
@@ -690,6 +696,7 @@ def build_hsi_dataloader(
         window=window,
         exclude_labeled_data=exclude_labeled_data,
         augmentation=augmentation,
+        with_img=False,
     )
     augmented_dataset.crop_dataset()
 
@@ -717,6 +724,12 @@ def build_hsi_dataloader(
 
     return trainloader, validationloader, testloader
 
+def build_hsi_testloader(window=None, batch_size=1):
+    path = "./data/helicoid_with_labels"
+    testset = HSIDataset(path, with_gt=True, window=window, with_img=False)
+    testset.crop_dataset()
+    testloader_target = DataLoader(testset, batch_size=batch_size, shuffle=False)
+    return testloader_target
 
 def _get_ratio(label):
     count_ones = torch.sum(label == 1).item()

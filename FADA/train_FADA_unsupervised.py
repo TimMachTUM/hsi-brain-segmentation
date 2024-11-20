@@ -3,7 +3,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import wandb
-from FADA.segmentation_model import SegmentationModelFADA
+from FADA.segmentation_model import (
+    SegmentationModelFADA,
+    SegmentationWithChannelReducerFADA,
+)
 from FADA.discriminator import PixelDiscriminator
 from FADA.classifier import Classifier
 from FADA.feature_extractor import FeatureExtractor
@@ -16,6 +19,7 @@ from segmentation_util import log_segmentation_example, evaluate_model
 from segmentation_util import build_segmentation_model, build_criterion, build_optimizer
 from segmentation_models_pytorch.encoders import get_encoder
 from torch.utils.data import DataLoader
+from dimensionality_reduction.autoencoder import build_gaussian_channel_reducer
 
 
 def soft_label_cross_entropy(pred, soft_label, pixel_weights=None):
@@ -38,6 +42,7 @@ def model_pipeline(
     batch_print=10,
     evaluate=True,
     with_overlays=False,
+    save_wandb=True,
 ):
     with wandb.init(project=project, config=config, name=config["model"]):
         config = wandb.config
@@ -52,6 +57,7 @@ def model_pipeline(
             batch_print,
             evaluate,
             with_overlays,
+            save_wandb=save_wandb,
         )
 
 
@@ -66,13 +72,24 @@ def init_model_and_train(
     batch_print,
     evaluate,
     with_overlays,
+    save_wandb=True,
 ):
     segmentation_model = build_segmentation_model(
-        config.encoder, config.architecture, device
+        config.encoder, config.architecture, device, in_channels=config.in_channels
     )
     if "pretrained" in config:
         print(f"Loading pretrained model from {config.pretrained}")
         segmentation_model.load_state_dict(torch.load(config.pretrained))
+    gaussian_reducer = None
+    if "gaussian" in config:
+        print("Using Gaussian Channel Reduction")
+        gaussian_reducer = build_gaussian_channel_reducer(
+            num_input_channels=826,
+            num_reduced_channels=config.in_channels,
+            load_from_path=config.gaussian,
+            device=device,
+        )
+
     feature_extractor = FeatureExtractor(segmentation_model).to(device)
     classifier = Classifier(segmentation_model).to(device)
     discriminator = PixelDiscriminator(
@@ -116,10 +133,18 @@ def init_model_and_train(
         device=device,
         batch_print=batch_print,
         with_overlays=with_overlays,
+        gaussian_reducer=gaussian_reducer,
+        save_wandb=save_wandb
     )
     if evaluate:
         if config.model:
-            model = SegmentationModelFADA(feature_extractor, classifier)
+            model = (
+                SegmentationModelFADA(feature_extractor, classifier)
+                if not gaussian_reducer
+                else SegmentationWithChannelReducerFADA(
+                    gaussian_reducer, feature_extractor, classifier
+                )
+            )
             model.load_state_dict(torch.load(f"./models/{config.model}.pth"))
 
         evaluate_model(model, testloader_target, device)
@@ -144,6 +169,8 @@ def train_and_validate(
     device="cuda",
     batch_print=10,
     with_overlays=False,
+    gaussian_reducer=None,
+    save_wandb=True,
 ):
     train_losses, domain_losses, val_losses_source, val_losses_target = [], [], [], []
     highest_dice = 0
@@ -195,6 +222,9 @@ def train_and_validate(
             # generate soft labels
             src_soft_label = F.softmax(src_pred, dim=1).detach().to(device)
             src_soft_label[src_soft_label > 0.9] = 0.9
+
+            if gaussian_reducer:
+                tgt_input = gaussian_reducer(tgt_input)
 
             tgt_features = feature_extractor(tgt_input)
             tgt_pred = classifier(tgt_features)
@@ -258,7 +288,13 @@ def train_and_validate(
         )
 
         # Validation
-        model = SegmentationModelFADA(feature_extractor, classifier).to(device)
+        if gaussian_reducer:
+            model = SegmentationWithChannelReducerFADA(
+                gaussian_reducer, feature_extractor, classifier
+            ).to(device)
+        else:
+            model = SegmentationModelFADA(feature_extractor, classifier).to(device)
+
         model.eval()
         val_running_loss_target = 0.0
         val_running_loss_source = 0.0
@@ -270,7 +306,12 @@ def train_and_validate(
                 loss = criterion_segmentation(outputs, labels)
                 val_running_loss_target += loss.item()
                 log_segmentation_example(
-                    model, data, device, epoch, title=f"Validation Overlay HSI {i}"
+                    model,
+                    data,
+                    device,
+                    epoch,
+                    title=f"Validation Overlay HSI {i}",
+                    channel_reducer=gaussian_reducer,
                 )
 
             # validation phase on source data
@@ -311,9 +352,10 @@ def train_and_validate(
             if dice_score_target > highest_dice:
                 highest_dice = dice_score_target
                 torch.save(model.state_dict(), f"./models/{model_name}.pth")
-                model_artifact = wandb.Artifact(f"{model_name}", type="model")
-                model_artifact.add_file(f"./models/{model_name}.pth")
-                wandb.log_artifact(model_artifact)
+                if save_wandb:
+                    model_artifact = wandb.Artifact(f"{model_name}", type="model")
+                    model_artifact.add_file(f"./models/{model_name}.pth")
+                    wandb.log_artifact(model_artifact)
 
         print(
             f"Epoch {epoch+1}, Validation Loss Source: {val_loss_source:.4f}, Validation Loss Target: {val_loss_target:.4f}"
@@ -361,8 +403,8 @@ def train_sweep(config=None):
         testset = HSIDataset(path, with_gt=True, window=window)
         testset.crop_dataset()
         testloader_target = DataLoader(testset, batch_size=1, shuffle=False)
-        config['model'] = run.name
-        model,_,_,_,_ = init_model_and_train(
+        config["model"] = run.name
+        model, _, _, _, _ = init_model_and_train(
             trainloader_source,
             validationloader_source,
             testloader_source,
@@ -373,6 +415,7 @@ def train_sweep(config=None):
             batch_print=10,
             evaluate=True,
             with_overlays=True,
+            save_wandb=False,
         )
         del model
         torch.cuda.empty_cache()

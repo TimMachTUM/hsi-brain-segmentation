@@ -100,7 +100,7 @@ def train_and_validate(
     return train_losses, val_losses
 
 
-def log_segmentation_example(model, data, device, epoch, title="Validation Overlay"):
+def log_segmentation_example(model, data, device, epoch, title="Validation Overlay", channel_reducer=None):
     inputs, labels = data[0][0], data[1][0].to(device).float()
     prediction = predict(model, inputs, device).squeeze(0).cpu().numpy()
 
@@ -108,6 +108,9 @@ def log_segmentation_example(model, data, device, epoch, title="Validation Overl
     labels = labels.cpu().numpy().squeeze()
 
     # Assuming inputs are in a suitable format (e.g., normalized between 0 and 1 or uint8)
+    if channel_reducer:
+        inputs = channel_reducer(inputs.unsqueeze(0).to(device)).squeeze(0)
+        
     input_image = inputs.cpu().numpy().squeeze()  # Convert to HWC format
     if input_image.shape[0] == 1:  # Grayscale (single channel)
         input_image = np.stack(

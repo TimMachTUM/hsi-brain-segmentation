@@ -14,6 +14,7 @@ from dataset import (
     HSIDataset,
     build_FIVES_random_crops_dataloaders,
     build_hsi_dataloader,
+    build_hsi_testloader,
 )
 from segmentation_util import log_segmentation_example, evaluate_model
 from segmentation_util import build_segmentation_model, build_criterion, build_optimizer
@@ -134,7 +135,7 @@ def init_model_and_train(
         batch_print=batch_print,
         with_overlays=with_overlays,
         gaussian_reducer=gaussian_reducer,
-        save_wandb=save_wandb
+        save_wandb=save_wandb,
     )
     if evaluate:
         if config.model:
@@ -388,7 +389,7 @@ def train_sweep(config=None):
                 load_from_path=config.dataset_path,
             )
         )
-        window = config.window
+        window = config.window if "window" in config else None
         trainloader_target = build_hsi_dataloader(
             batch_size=config.batch_size_target,
             train_split=1,
@@ -399,10 +400,10 @@ def train_sweep(config=None):
             augmented=config.augmented,
         )[0]
 
-        path = "./data/helicoid_with_labels"
-        testset = HSIDataset(path, with_gt=True, window=window)
-        testset.crop_dataset()
-        testloader_target = DataLoader(testset, batch_size=1, shuffle=False)
+        testloader_target = build_hsi_testloader(
+            batch_size=1,
+            window=window,
+        )
         config["model"] = run.name
         model, _, _, _, _ = init_model_and_train(
             trainloader_source,

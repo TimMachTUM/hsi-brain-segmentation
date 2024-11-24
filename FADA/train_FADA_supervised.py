@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import wandb
-from FADA.segmentation_model import SegmentationModelFADA
+from FADA.segmentation_model import SegmentationModelFADA, build_FADA_segmentation_model
 from FADA.discriminator import PixelDiscriminator
 from FADA.classifier import Classifier
 from FADA.feature_extractor import FeatureExtractor
@@ -139,18 +139,13 @@ def init_model_and_train(
 
 
 def get_unsupervised_model(device):
-    segmentation_model = build_segmentation_model(
-        "timm-regnetx_320", "Linknet", device, in_channels=1
+    return build_FADA_segmentation_model(
+        architecture="Linknet",
+        encoder="timm-regnetx_320",
+        in_channels=1,
+        path="models/FADA-Linknet-timm-regnetx_320-window_500-600_pretrained-augmented_target-random_crops_bloodvessel_ratio01-unsupervised.pth",
+        device=device,
     )
-    feature_extractor = FeatureExtractor(segmentation_model).to(device)
-    classifier = Classifier(segmentation_model).to(device)
-    model = SegmentationModelFADA(feature_extractor, classifier)
-    model.load_state_dict(
-        torch.load(
-            "models/FADA-Linknet-timm-regnetx_320-window_500-600_pretrained-augmented_target-random_crops_bloodvessel_ratio01-unsupervised.pth"
-        )
-    )
-    return model
 
 
 def train_and_validate(

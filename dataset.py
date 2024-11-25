@@ -768,3 +768,9 @@ def save_random_crops_dataset_to_path(trainset, valset, testset, path, threshold
             label = transforms.ToPILImage()(data[1])
             label.save(f"{test_path}/GroundTruth/{i}.png")
             print(f"Bloodvessel ratio: {bloodvessel_ratio}, Image {i} saved")
+            
+def get_wavelengths_from_metadata(data_path='./004-02/raw.hdr'):
+    img = spectral.open_image(data_path)
+    wavelength_array = np.array(img.metadata["wavelength"]).astype(float)
+    
+    return wavelength_array

@@ -8,7 +8,7 @@ log_file = open("./out/hyperparameter_logs.txt", "w")
 sys.stdout = log_file
 wandb.login()
 
-with open("./config/learning_rate.yaml", "r") as file:
+with open("./config/supervised_FADA_sweep.yaml", "r") as file:
     sweep_config = yaml.safe_load(file)
 
 sweep_config["parameters"]["device"] = {

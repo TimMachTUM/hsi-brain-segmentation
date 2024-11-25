@@ -135,7 +135,7 @@ def show_interactive_image_with_spectrum(image_id=4, rgb=True):
         """Handle the clear button click event."""
         selected_pixels.clear()
         # Update the scatter plot to remove all markers
-        scatter_plot.set_offsets([])
+        scatter_plot.set_offsets(np.empty((0, 2)))
         scatter_plot.set_edgecolors([])
         # Clear existing lines in the spectrum plot
         for line in lines:

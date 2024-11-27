@@ -4,6 +4,7 @@ from dataset import build_hsi_testloader, get_wavelengths_from_metadata
 import cv2
 import ipywidgets as widgets
 from IPython.display import display
+import torch
 
 
 def show_interactive_image_with_spectrum(image_id=4, rgb=True):
@@ -158,4 +159,127 @@ def show_interactive_image_with_spectrum(image_id=4, rgb=True):
     # Connect the click event to the callback function
     fig.canvas.mpl_connect("button_press_event", onclick)
 
+    plt.show()
+
+
+def plot_intensity(dataloader, bins=50, title="Intensity Distribution of Dataset"):
+    """
+    Plots the intensity distribution of a PyTorch dataset.
+
+    Args:
+        dataset (Dataset): PyTorch dataset containing the data.
+        batch_size (int): Batch size for DataLoader.
+        bins (int): Number of bins for the histogram.
+    """
+
+    # Collect intensity values from the dataset
+    intensities = []
+    for batch in dataloader:
+        image = batch[0]
+        intensities.append(image.flatten())
+
+    # Flatten all intensities into a single array
+    intensities = torch.cat(intensities).numpy()
+
+    # Plotting the intensity distribution
+    plt.figure(figsize=(8, 6))
+    plt.hist(intensities, bins=bins, alpha=0.7, color="blue")
+    plt.title(title)
+    plt.xlabel("Intensity Value")
+    plt.ylabel("Frequency")
+    plt.grid(axis="y", alpha=0.75)
+    plt.show()
+    
+def plot_intensity_for_label(dataloader, label=1, bins=50, title="Intensity Distribution for Label"):
+    """
+    Plots the intensity distribution of pixels with a specific label in a PyTorch dataset.
+
+    Args:
+        dataloader (DataLoader): PyTorch DataLoader containing the dataset.
+        label (int): The label value to filter pixels (default is 1).
+        bins (int): Number of bins for the histogram.
+        title (str): Title for the plot.
+    """
+    # Collect intensity values for the specified label
+    intensities = []
+    for batch in dataloader:
+        images = batch[0]  # Batch of images
+        masks = batch[1]   # Corresponding segmentation masks
+
+        # Filter intensities where the mask is equal to the specified label
+        for image, mask in zip(images, masks):
+            intensities.append(image[mask == label].flatten())
+
+    # Flatten all intensities into a single array
+    intensities = torch.cat(intensities).numpy()
+
+    # Plotting the intensity distribution
+    plt.figure(figsize=(8, 6))
+    plt.hist(intensities, bins=bins, alpha=0.7, color="blue")
+    plt.title(f"{title} (Label={label})")
+    plt.xlabel("Intensity Value")
+    plt.ylabel("Frequency")
+    plt.grid(axis="y", alpha=0.75)
+    plt.show()
+    
+    
+def compute_snr(image, label):
+    """
+    Compute the Signal-to-Noise Ratio (SNR) for a given image and segmentation label.
+
+    Args:
+        image (torch.Tensor): The image tensor of shape (1, H, W).
+        label (torch.Tensor): The segmentation label tensor of shape (1, H, W).
+
+    Returns:
+        float: The SNR value.
+    """
+    # Ensure image and label are in numpy format for easier indexing
+    image = image.squeeze().numpy()
+    label = label.squeeze().numpy()
+
+    # Signal: Pixels where the label > 0
+    signal_region = image[label > 0]
+
+    # Background: Pixels where the label == 0
+    background_region = image[label == 0]
+
+    # Compute signal statistics
+    mu_signal = signal_region.mean()
+
+    # Compute noise as the standard deviation of the background
+    sigma_noise = background_region.std()
+
+    # Compute SNR
+    if sigma_noise == 0:
+        return float("inf")  # Handle edge case where noise is zero
+    snr = mu_signal / sigma_noise
+    return snr
+
+
+def plot_snr_distribution(dataloader, bins=50, title="SNR Distribution of Dataset"):
+    """
+    Compute and plot the SNR distribution for a dataset.
+
+    Args:
+        dataset (Dataset): PyTorch dataset containing images and labels.
+        batch_size (int): Batch size for DataLoader.
+        bins (int): Number of bins for the histogram.
+    """
+
+    # Collect SNR values
+    snr_values = []
+    for batch in dataloader:
+        images, labels = batch[0], batch[1]
+        for i in range(images.size(0)):
+            snr = compute_snr(images[i], labels[i])
+            snr_values.append(snr)
+
+    # Plotting the SNR distribution
+    plt.figure(figsize=(8, 6))
+    plt.hist(snr_values, bins=bins, alpha=0.7, color="green")
+    plt.title(title)
+    plt.xlabel("SNR")
+    plt.ylabel("Frequency")
+    plt.grid(axis="y", alpha=0.75)
     plt.show()

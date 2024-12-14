@@ -382,6 +382,7 @@ def train_and_validate(
 def train_sweep(config=None):
     with wandb.init(config=config) as run:
         config = wandb.config
+        rgb = config.rgb if 'rgb' in config else False
         trainloader_source, validationloader_source, testloader_source = (
             build_FIVES_random_crops_dataloaders(
                 batch_size=config.batch_size_source,
@@ -398,11 +399,13 @@ def train_sweep(config=None):
             window=window,
             exclude_labeled_data=True,
             augmented=config.augmented,
+            rgb=rgb,
         )[0]
 
         testloader_target = build_hsi_testloader(
             batch_size=1,
             window=window,
+            rgb=rgb,
         )
         config["model"] = run.name
         model, _, _, _, _ = init_model_and_train(

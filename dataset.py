@@ -83,6 +83,7 @@ class HSIDataset(Dataset):
         exclude_labeled_data=False,
         augmentation=None,
         with_img=True,
+        rgb=False,
     ):
         """
         Initialize the dataset with the path to the data.
@@ -97,8 +98,9 @@ class HSIDataset(Dataset):
         self.window = window
         self.with_gt = with_gt
         self.with_img = with_img
-        labeled_data = ["004-02", "012-02", "021-01", "027-02", "030-02"]
         self.augmentation = augmentation
+        self.rgb = rgb
+        labeled_data = ["004-02", "012-02", "021-01", "027-02", "030-02"]
 
         subdirs = os.listdir(root_dir)
         if exclude_labeled_data:
@@ -165,6 +167,12 @@ class HSIDataset(Dataset):
         hsi_image = (hsi_image - dark_full) / (white_full - dark_full)
         hsi_image[hsi_image <= 0] = 10**-2
         hsi_image = hsi_image.transpose(2, 0, 1)
+        
+        if self.rgb:
+            hsi_image = np.stack(
+                [hsi_image[425, :, :], hsi_image[192, :, :], hsi_image[109, :, :]],
+                axis=0,
+            )
 
         if self.window is not None:
             channels = self.get_window_from_wavelengths(self.window)
@@ -664,11 +672,16 @@ def build_hsi_dataloader(
     window=None,
     exclude_labeled_data=False,
     augmented=False,
+    rgb=False,
 ):
     path = "../../ivan/HELICoiD/HSI_Human_Brain_Database_IEEE_Access/"
 
     dataset = HSIDataset(
-        path, window=window, exclude_labeled_data=exclude_labeled_data, with_img=False
+        path,
+        window=window,
+        exclude_labeled_data=exclude_labeled_data,
+        with_img=False,
+        rgb=rgb,
     )
     dataset.crop_dataset()
 
@@ -697,6 +710,7 @@ def build_hsi_dataloader(
         exclude_labeled_data=exclude_labeled_data,
         augmentation=augmentation,
         with_img=False,
+        rgb=rgb,
     )
     augmented_dataset.crop_dataset()
 
@@ -724,12 +738,14 @@ def build_hsi_dataloader(
 
     return trainloader, validationloader, testloader
 
-def build_hsi_testloader(window=None, batch_size=1):
+
+def build_hsi_testloader(window=None, batch_size=1, rgb=False):
     path = "./data/helicoid_with_labels"
-    testset = HSIDataset(path, with_gt=True, window=window, with_img=False)
+    testset = HSIDataset(path, with_gt=True, window=window, with_img=False, rgb=rgb)
     testset.crop_dataset()
     testloader_target = DataLoader(testset, batch_size=batch_size, shuffle=False)
     return testloader_target
+
 
 def _get_ratio(label):
     count_ones = torch.sum(label == 1).item()
@@ -768,9 +784,10 @@ def save_random_crops_dataset_to_path(trainset, valset, testset, path, threshold
             label = transforms.ToPILImage()(data[1])
             label.save(f"{test_path}/GroundTruth/{i}.png")
             print(f"Bloodvessel ratio: {bloodvessel_ratio}, Image {i} saved")
-            
-def get_wavelengths_from_metadata(data_path='./004-02/raw.hdr'):
+
+
+def get_wavelengths_from_metadata(data_path="./004-02/raw.hdr"):
     img = spectral.open_image(data_path)
     wavelength_array = np.array(img.metadata["wavelength"]).astype(float)
-    
+
     return wavelength_array

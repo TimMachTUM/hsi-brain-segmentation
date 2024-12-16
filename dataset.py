@@ -84,6 +84,7 @@ class HSIDataset(Dataset):
         augmentation=None,
         with_img=True,
         rgb=False,
+        rgb_channels=(425, 192, 109)
     ):
         """
         Initialize the dataset with the path to the data.
@@ -100,6 +101,7 @@ class HSIDataset(Dataset):
         self.with_img = with_img
         self.augmentation = augmentation
         self.rgb = rgb
+        self.rgb_channels = rgb_channels
         labeled_data = ["004-02", "012-02", "021-01", "027-02", "030-02"]
 
         subdirs = os.listdir(root_dir)
@@ -169,8 +171,9 @@ class HSIDataset(Dataset):
         hsi_image = hsi_image.transpose(2, 0, 1)
 
         if self.rgb:
+            red, green, blue = self.rgb_channels
             hsi_image = np.stack(
-                [hsi_image[425, :, :], hsi_image[192, :, :], hsi_image[109, :, :]],
+                [hsi_image[red, :, :], hsi_image[green, :, :], hsi_image[blue, :, :]],
                 axis=0,
             )
             hsi_image = (hsi_image - np.min(hsi_image)) / (
@@ -676,6 +679,7 @@ def build_hsi_dataloader(
     exclude_labeled_data=False,
     augmented=False,
     rgb=False,
+    rgb_channels=(425, 192, 109),
 ):
     assert not (rgb and window is not None), "If rgb=True, window must be None."
     assert not (window is not None and rgb), "If window is set, rgb must be False."
@@ -688,6 +692,7 @@ def build_hsi_dataloader(
         exclude_labeled_data=exclude_labeled_data,
         with_img=False,
         rgb=rgb,
+        rgb_channels=rgb_channels,
     )
     dataset.crop_dataset()
 
@@ -717,6 +722,7 @@ def build_hsi_dataloader(
         augmentation=augmentation,
         with_img=False,
         rgb=rgb,
+        rgb_channels=rgb_channels,
     )
     augmented_dataset.crop_dataset()
 
@@ -745,12 +751,12 @@ def build_hsi_dataloader(
     return trainloader, validationloader, testloader
 
 
-def build_hsi_testloader(window=None, batch_size=1, rgb=False):
+def build_hsi_testloader(window=None, batch_size=1, rgb=False, rgb_channels=(425, 192, 109)):
     assert not (rgb and window is not None), "If rgb=True, window must be None."
     assert not (window is not None and rgb), "If window is set, rgb must be False."
     
     path = "./data/helicoid_with_labels"
-    testset = HSIDataset(path, with_gt=True, window=window, with_img=False, rgb=rgb)
+    testset = HSIDataset(path, with_gt=True, window=window, with_img=False, rgb=rgb, rgb_channels=rgb_channels)
     testset.crop_dataset()
     testloader_target = DataLoader(testset, batch_size=batch_size, shuffle=False)
     return testloader_target

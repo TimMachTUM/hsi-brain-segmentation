@@ -167,11 +167,14 @@ class HSIDataset(Dataset):
         hsi_image = (hsi_image - dark_full) / (white_full - dark_full)
         hsi_image[hsi_image <= 0] = 10**-2
         hsi_image = hsi_image.transpose(2, 0, 1)
-        
+
         if self.rgb:
             hsi_image = np.stack(
                 [hsi_image[425, :, :], hsi_image[192, :, :], hsi_image[109, :, :]],
                 axis=0,
+            )
+            hsi_image = (hsi_image - np.min(hsi_image)) / (
+                np.max(hsi_image) - np.min(hsi_image)
             )
 
         if self.window is not None:
@@ -674,7 +677,10 @@ def build_hsi_dataloader(
     augmented=False,
     rgb=False,
 ):
-    path = "../../ivan/HELICoiD/HSI_Human_Brain_Database_IEEE_Access/"
+    assert not (rgb and window is not None), "If rgb=True, window must be None."
+    assert not (window is not None and rgb), "If window is set, rgb must be False."
+    
+    path = "../../../../mnt/Drive3/ivan/HELICoiD/HSI_Human_Brain_Database_IEEE_Access/"
 
     dataset = HSIDataset(
         path,
@@ -740,6 +746,9 @@ def build_hsi_dataloader(
 
 
 def build_hsi_testloader(window=None, batch_size=1, rgb=False):
+    assert not (rgb and window is not None), "If rgb=True, window must be None."
+    assert not (window is not None and rgb), "If window is set, rgb must be False."
+    
     path = "./data/helicoid_with_labels"
     testset = HSIDataset(path, with_gt=True, window=window, with_img=False, rgb=rgb)
     testset.crop_dataset()

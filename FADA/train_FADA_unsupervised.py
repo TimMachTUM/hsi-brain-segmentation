@@ -21,6 +21,7 @@ from segmentation_util import build_segmentation_model, build_criterion, build_o
 from segmentation_models_pytorch.encoders import get_encoder
 from torch.utils.data import DataLoader
 from dimensionality_reduction.autoencoder import build_gaussian_channel_reducer
+import os
 
 
 def soft_label_cross_entropy(pred, soft_label, pixel_weights=None):
@@ -425,4 +426,7 @@ def train_sweep(config=None):
             save_wandb=False,
         )
         del model
+        if os.path.exists(f"./models/{config.model}.pth"):
+            os.remove(f"./models/{config.model}.pth")
+            print(f"Removed model {config.model}.pth")
         torch.cuda.empty_cache()

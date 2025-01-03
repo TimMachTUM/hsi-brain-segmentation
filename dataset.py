@@ -84,7 +84,8 @@ class HSIDataset(Dataset):
         augmentation=None,
         with_img=True,
         rgb=False,
-        rgb_channels=(425, 192, 109)
+        rgb_channels=(425, 192, 109),
+        ring_label_dir=None,
     ):
         """
         Initialize the dataset with the path to the data.
@@ -102,6 +103,7 @@ class HSIDataset(Dataset):
         self.augmentation = augmentation
         self.rgb = rgb
         self.rgb_channels = rgb_channels
+        self.ring_label_dir = ring_label_dir
         labeled_data = ["004-02", "012-02", "021-01", "027-02", "030-02"]
 
         subdirs = os.listdir(root_dir)
@@ -159,8 +161,17 @@ class HSIDataset(Dataset):
         if self.with_gt:
             label = Image.open(gt_path).convert("L")
             label = (np.array(label) >= 128).astype(int)
-            transform = transforms.ToTensor()
-            label = transform(label)
+            label = transforms.ToTensor()(label)
+        elif self.ring_label_dir:
+            image_dir = os.path.basename(os.path.dirname(white_path))
+            ring_label_filename = f"{image_dir}.png"
+            ring_label_path = os.path.join(self.ring_label_dir, ring_label_filename)
+            if os.path.exists(ring_label_path):
+                label = Image.open(ring_label_path).convert("L") 
+            else:
+                label = Image.new("L", (hsi_image.shape[0], hsi_image.shape[1]), 0)
+            label = transforms.ToTensor()(label)
+            
         else:
             label = spectral.open_image(gt_path).load()
             label = (label.transpose(2, 0, 1) == 3).astype(int)
@@ -680,6 +691,7 @@ def build_hsi_dataloader(
     augmented=False,
     rgb=False,
     rgb_channels=(425, 192, 109),
+    ring_label_dir=None,
 ):
     assert not (rgb and window is not None), "If rgb=True, window must be None."
     assert not (window is not None and rgb), "If window is set, rgb must be False."
@@ -693,6 +705,7 @@ def build_hsi_dataloader(
         with_img=False,
         rgb=rgb,
         rgb_channels=rgb_channels,
+        ring_label_dir=ring_label_dir,
     )
     dataset.crop_dataset()
 
@@ -723,6 +736,7 @@ def build_hsi_dataloader(
         with_img=False,
         rgb=rgb,
         rgb_channels=rgb_channels,
+        ring_label_dir=ring_label_dir,
     )
     augmented_dataset.crop_dataset()
 

@@ -173,10 +173,10 @@ class VariationalAutoencoder(nn.Module):
 
 
 class GaussianAutoEncoder(nn.Module):
-    def __init__(self, num_input_channels=826, num_reduced_channels=3):
+    def __init__(self, num_input_channels=826, num_reduced_channels=3, priors=None):
         super(GaussianAutoEncoder, self).__init__()
         self.encoder = GaussianChannelReduction(
-            num_input_channels, num_reduced_channels
+            num_input_channels, num_reduced_channels, priors
         )
         self.decoder = nn.Sequential(
             # Optional: Additional convolutional layers
@@ -281,6 +281,17 @@ def train_and_validate_autoencoder(
         train_losses.append(train_loss)
         print(f"Epoch {epoch+1}, Train Loss: {train_loss:.4f}")
         wandb.log({"epoch": epoch + 1, "train/loss": train_loss}, step=epoch + 1)
+        print(
+            f"Epoch {epoch+1}, mu: {model.encoder.mu.data.cpu().numpy()}, log_sigma: {model.encoder.log_sigma.data.cpu().numpy()}"
+        )
+        wandb.log(
+            {
+                "epoch": epoch + 1,
+                "mu": model.encoder.mu.data.cpu().numpy(),
+                "log_sigma": model.encoder.log_sigma.data.cpu().numpy(),
+            },
+            step=epoch + 1,
+        )
 
         # Validation phase
         model.eval()

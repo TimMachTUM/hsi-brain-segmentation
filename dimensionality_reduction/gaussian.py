@@ -2,13 +2,16 @@ import torch
 import torch.nn as nn
 
 class GaussianChannelReduction(nn.Module):
-    def __init__(self, num_input_channels=826, num_output_channels=3):
+    def __init__(self, num_input_channels=826, num_output_channels=3, priors=None):
         super(GaussianChannelReduction, self).__init__()
         self.num_input_channels = num_input_channels
         self.num_output_channels = num_output_channels
-
+        
+        if priors is None:
+            priors = torch.linspace(0, num_input_channels - 1, num_output_channels)
+            
+        self.mu = nn.Parameter(priors.clone())
         # Initialize mu and log_sigma as learnable parameters
-        self.mu = nn.Parameter(torch.linspace(0, num_input_channels - 1, num_output_channels))
         self.log_sigma = nn.Parameter(torch.zeros(num_output_channels))  # Use log_sigma for stability
 
         # Register a buffer for channel indices

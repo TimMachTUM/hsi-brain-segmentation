@@ -116,6 +116,8 @@ def init_model_and_train(
         learning_rate=config.learning_rate_dis,
         optimizer=config.optimizer,
     )
+    with_contrastive_loss = "contrastive_loss" in config and config.contrastive_loss
+    penalize_rings_weight = config.penalize_rings_weight if "penalize_rings_weight" in config else 0.25
 
     train_loss, domain_loss, val_loss_source, val_loss_target = train_and_validate(
         feature_extractor,
@@ -137,6 +139,8 @@ def init_model_and_train(
         with_overlays=with_overlays,
         gaussian_reducer=gaussian_reducer,
         save_wandb=save_wandb,
+        with_contrastive_loss=with_contrastive_loss,
+        penalize_rings_weight=penalize_rings_weight,
     )
     if evaluate:
         if config.model:
@@ -173,6 +177,8 @@ def train_and_validate(
     with_overlays=False,
     gaussian_reducer=None,
     save_wandb=True,
+    with_contrastive_loss=False,
+    penalize_rings_weight=0.25,
 ):
     train_losses, domain_losses, val_losses_source, val_losses_target = [], [], [], []
     highest_dice = 0
@@ -186,6 +192,8 @@ def train_and_validate(
         len(trainloader_source),
         len(trainloader_target),
     )
+    # Define the contrastive loss function
+    contrastive_loss_fn = nn.BCEWithLogitsLoss()
 
     for epoch in range(epochs):
         feature_extractor.train()
@@ -225,10 +233,9 @@ def train_and_validate(
             src_soft_label = F.softmax(src_pred, dim=1).detach().to(device)
             src_soft_label[src_soft_label > 0.9] = 0.9
 
-            if gaussian_reducer:
-                tgt_input = gaussian_reducer(tgt_input)
-
-            tgt_features = feature_extractor(tgt_input)
+            tgt_features = feature_extractor(
+                gaussian_reducer(tgt_input) if gaussian_reducer else tgt_input
+            )
             tgt_pred = classifier(tgt_features)
             tgt_pred = tgt_pred.div(temperature)
             tgt_soft_label = F.softmax(tgt_pred, dim=1).detach().to(device)
@@ -241,7 +248,30 @@ def train_and_validate(
                     (tgt_soft_label, torch.zeros_like(tgt_soft_label).to(device)), dim=1
                 ),
             )
-            loss_adv_tgt.backward()
+            loss_adv_tgt.backward(retain_graph=True)
+
+            if with_contrastive_loss:
+                black_ring_mask = target_domain_data[1].to(device).float()
+                tgt_pred_sigmoid = torch.sigmoid(tgt_pred)
+                contrastive_loss = torch.mean(tgt_pred_sigmoid * black_ring_mask)
+                weighted_contrastive_loss = penalize_rings_weight * contrastive_loss
+                running_loss += weighted_contrastive_loss.item()
+                weighted_contrastive_loss.backward()
+                # running_loss += contrastive_loss.item()
+                # loss_tgt = loss_adv_tgt + contrastive_loss
+                # loss_tgt.backward()
+                # blackring_preds = tgt_pred[black_ring_mask == 1]
+
+                # if black_ring_mask.sum() > 0:
+                #     desired_background = torch.zeros_like(blackring_preds).to(device)
+
+                #     # Weight and backpropagate
+                #     loss_penalize = contrastive_loss_fn(
+                #         blackring_preds, desired_background
+                #     )
+                #     loss_penalize_weighted = penalize_rings_weight * loss_penalize
+                #     loss_penalize_weighted.backward()
+
             optimizer_fea.step()
             optimizer_cls.step()
 
@@ -383,8 +413,10 @@ def train_and_validate(
 def train_sweep(config=None):
     with wandb.init(config=config) as run:
         config = wandb.config
-        rgb = config.rgb if 'rgb' in config else False
-        rgb_channels = config.rgb_channels if 'rgb_channels' in config else (425, 192, 109)
+        rgb = config.rgb if "rgb" in config else False
+        rgb_channels = (
+            config.rgb_channels if "rgb_channels" in config else (425, 192, 109)
+        )
         trainloader_source, validationloader_source, testloader_source = (
             build_FIVES_random_crops_dataloaders(
                 batch_size=config.batch_size_source,

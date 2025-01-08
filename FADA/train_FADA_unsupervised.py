@@ -19,8 +19,10 @@ from dataset import (
 from segmentation_util import log_segmentation_example, evaluate_model
 from segmentation_util import build_segmentation_model, build_criterion, build_optimizer
 from segmentation_models_pytorch.encoders import get_encoder
-from torch.utils.data import DataLoader
-from dimensionality_reduction.autoencoder import build_gaussian_channel_reducer
+from dimensionality_reduction.autoencoder import (
+    build_gaussian_channel_reducer,
+    build_conv_channel_reducer,
+)
 import os
 
 
@@ -82,13 +84,22 @@ def init_model_and_train(
     if "pretrained" in config:
         print(f"Loading pretrained model from {config.pretrained}")
         segmentation_model.load_state_dict(torch.load(config.pretrained))
-    gaussian_reducer = None
+        
+    reducer = None
     if "gaussian" in config:
         print("Using Gaussian Channel Reduction")
-        gaussian_reducer = build_gaussian_channel_reducer(
+        reducer = build_gaussian_channel_reducer(
             num_input_channels=826,
             num_reduced_channels=config.in_channels,
             load_from_path=config.gaussian,
+            device=device,
+        )
+    elif "conv_reducer" in config:
+        print("Using Convolutional Channel Reduction")
+        reducer = build_conv_channel_reducer(
+            num_input_channels=826,
+            num_reduced_channels=config.in_channels,
+            load_from_path=config.conv_reducer,
             device=device,
         )
 
@@ -117,7 +128,9 @@ def init_model_and_train(
         optimizer=config.optimizer,
     )
     with_contrastive_loss = "contrastive_loss" in config and config.contrastive_loss
-    penalize_rings_weight = config.penalize_rings_weight if "penalize_rings_weight" in config else 0.25
+    penalize_rings_weight = (
+        config.penalize_rings_weight if "penalize_rings_weight" in config else 0.25
+    )
 
     train_loss, domain_loss, val_loss_source, val_loss_target = train_and_validate(
         feature_extractor,
@@ -137,7 +150,7 @@ def init_model_and_train(
         device=device,
         batch_print=batch_print,
         with_overlays=with_overlays,
-        gaussian_reducer=gaussian_reducer,
+        hsi_reducer=reducer,
         save_wandb=save_wandb,
         with_contrastive_loss=with_contrastive_loss,
         penalize_rings_weight=penalize_rings_weight,
@@ -146,9 +159,9 @@ def init_model_and_train(
         if config.model:
             model = (
                 SegmentationModelFADA(feature_extractor, classifier)
-                if not gaussian_reducer
+                if not reducer
                 else SegmentationWithChannelReducerFADA(
-                    gaussian_reducer, feature_extractor, classifier
+                    reducer, feature_extractor, classifier
                 )
             )
             model.load_state_dict(torch.load(f"./models/{config.model}.pth"))
@@ -175,7 +188,7 @@ def train_and_validate(
     device="cuda",
     batch_print=10,
     with_overlays=False,
-    gaussian_reducer=None,
+    hsi_reducer=None,
     save_wandb=True,
     with_contrastive_loss=False,
     penalize_rings_weight=0.25,
@@ -234,7 +247,7 @@ def train_and_validate(
             src_soft_label[src_soft_label > 0.9] = 0.9
 
             tgt_features = feature_extractor(
-                gaussian_reducer(tgt_input) if gaussian_reducer else tgt_input
+                hsi_reducer(tgt_input) if hsi_reducer else tgt_input
             )
             tgt_pred = classifier(tgt_features)
             tgt_pred = tgt_pred.div(temperature)
@@ -257,20 +270,6 @@ def train_and_validate(
                 weighted_contrastive_loss = penalize_rings_weight * contrastive_loss
                 running_loss += weighted_contrastive_loss.item()
                 weighted_contrastive_loss.backward()
-                # running_loss += contrastive_loss.item()
-                # loss_tgt = loss_adv_tgt + contrastive_loss
-                # loss_tgt.backward()
-                # blackring_preds = tgt_pred[black_ring_mask == 1]
-
-                # if black_ring_mask.sum() > 0:
-                #     desired_background = torch.zeros_like(blackring_preds).to(device)
-
-                #     # Weight and backpropagate
-                #     loss_penalize = contrastive_loss_fn(
-                #         blackring_preds, desired_background
-                #     )
-                #     loss_penalize_weighted = penalize_rings_weight * loss_penalize
-                #     loss_penalize_weighted.backward()
 
             optimizer_fea.step()
             optimizer_cls.step()
@@ -320,9 +319,9 @@ def train_and_validate(
         )
 
         # Validation
-        if gaussian_reducer:
+        if hsi_reducer:
             model = SegmentationWithChannelReducerFADA(
-                gaussian_reducer, feature_extractor, classifier
+                hsi_reducer, feature_extractor, classifier
             ).to(device)
         else:
             model = SegmentationModelFADA(feature_extractor, classifier).to(device)
@@ -343,7 +342,7 @@ def train_and_validate(
                     device,
                     epoch,
                     title=f"Validation Overlay HSI {i}",
-                    channel_reducer=gaussian_reducer,
+                    channel_reducer=hsi_reducer,
                 )
 
             # validation phase on source data

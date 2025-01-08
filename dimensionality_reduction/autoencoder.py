@@ -5,6 +5,7 @@ import wandb
 import numpy as np
 
 from dimensionality_reduction.gaussian import GaussianChannelReduction
+from dimensionality_reduction.conv_reducer import ConvReducer
 
 
 class ResidualBlock(nn.Module):
@@ -189,6 +190,29 @@ class GaussianAutoEncoder(nn.Module):
         return reconstructed
 
 
+class ConvAutoEncoder(nn.Module):
+    def __init__(
+        self,
+        num_input_channels=826,
+        num_reduced_channels=3,
+        mean_list=None,
+        log_sigma_list=None,
+    ):
+        super(ConvAutoEncoder, self).__init__()
+        self.encoder = ConvReducer(
+            num_input_channels, num_reduced_channels, mean_list, log_sigma_list
+        )
+        self.decoder = nn.Sequential(
+            # Optional: Additional convolutional layers
+            nn.Conv2d(num_reduced_channels, num_input_channels, kernel_size=1)
+        )
+
+    def forward(self, x):
+        encoded = self.encoder(x)
+        reconstructed = self.decoder(encoded)
+        return reconstructed
+
+
 def vae_loss(recon_x, x, mu, logvar):
     # Reconstruction loss
     recon_loss = F.mse_loss(recon_x, x, reduction="sum")
@@ -281,17 +305,6 @@ def train_and_validate_autoencoder(
         train_losses.append(train_loss)
         print(f"Epoch {epoch+1}, Train Loss: {train_loss:.4f}")
         wandb.log({"epoch": epoch + 1, "train/loss": train_loss}, step=epoch + 1)
-        print(
-            f"Epoch {epoch+1}, mu: {model.encoder.mu.data.cpu().numpy()}, log_sigma: {model.encoder.log_sigma.data.cpu().numpy()}"
-        )
-        wandb.log(
-            {
-                "epoch": epoch + 1,
-                "mu": model.encoder.mu.data.cpu().numpy(),
-                "log_sigma": model.encoder.log_sigma.data.cpu().numpy(),
-            },
-            step=epoch + 1,
-        )
 
         # Validation phase
         model.eval()
@@ -470,6 +483,14 @@ def build_gaussian_channel_reducer(
     num_input_channels=826, num_reduced_channels=3, load_from_path=None, device="cuda"
 ):
     model = GaussianAutoEncoder(num_input_channels, num_reduced_channels).to(device)
+    if load_from_path:
+        model.load_state_dict(torch.load(load_from_path))
+    return model.encoder
+
+def build_conv_channel_reducer(
+    num_input_channels=826, num_reduced_channels=3, load_from_path=None, device="cuda"
+):
+    model = ConvAutoEncoder(num_input_channels, num_reduced_channels).to(device)
     if load_from_path:
         model.load_state_dict(torch.load(load_from_path))
     return model.encoder

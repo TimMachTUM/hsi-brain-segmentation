@@ -3,7 +3,7 @@ import torch.nn as nn
 
 from FADA.classifier import Classifier
 from FADA.feature_extractor import FeatureExtractor
-from segmentation_util import build_segmentation_model
+from segmentation_util import build_segmentation_model, load_model
 
 class SegmentationModelFADA(nn.Module):
     def __init__(self, feature_extractor, classifier):
@@ -41,5 +41,5 @@ def build_FADA_segmentation_model(architecture, encoder, in_channels, path, devi
     feature_extractor = FeatureExtractor(segmentation_model).to(device)
     classifier = Classifier(segmentation_model).to(device)
     model = SegmentationModelFADA(feature_extractor, classifier).to(device)
-    model.load_state_dict(torch.load(path))
+    model = load_model(model, path, device)
     return model

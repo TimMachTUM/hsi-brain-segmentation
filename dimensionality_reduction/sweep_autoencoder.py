@@ -12,7 +12,7 @@ with open("./config/gaussian_autoencoder.yaml", "r") as file:
     sweep_config = yaml.safe_load(file)
 
 sweep_config["parameters"]["device"] = {
-    "value": "cuda:1" if torch.cuda.is_available() else "cpu"
+    "value": "cuda:7" if torch.cuda.is_available() else "cpu"
 }
 sweep_id = wandb.sweep(sweep_config, project="hsi-autoencoder")
 wandb.agent(sweep_id, function=train_sweep, count=20)

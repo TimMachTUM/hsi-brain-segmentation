@@ -6,9 +6,13 @@ import torch.nn as nn
 import wandb
 import numpy as np
 
+from FADA.classifier import Classifier
+from FADA.feature_extractor import FeatureExtractor
+from FADA.segmentation_model import SegmentationWithChannelReducerFADA
 from dataset import build_hsi_dataloader, build_hsi_testloader
 from dimensionality_reduction.gaussian import GaussianChannelReduction
 from dimensionality_reduction.conv_reducer import ConvReducer
+from segmentation_util import build_segmentation_model, evaluate_model, load_model
 
 
 class ResidualBlock(nn.Module):
@@ -360,30 +364,9 @@ def train_and_validate_autoencoder(
                 val_running_loss += loss.item()
 
                 if i == 0:
-                    encoded_output = model.encoder(inputs)[0].cpu().numpy().squeeze()
-                    # Normalize the output image to be in the range [0, 255]
-                    if encoded_output.shape[0] == 1:
-                        image = np.stack(
-                            [encoded_output, encoded_output, encoded_output], axis=-1
-                        )
-                    elif encoded_output.shape[0] == 3:
-                        image = encoded_output.transpose(1, 2, 0)
-                    image_min = image.min()
-                    image_max = image.max()
-
-                    image = 255 * (image - image_min) / (image_max - image_min)
-                    image = image.astype(np.uint8)
-
-                    # Log the RGB image to WandB
-                    wandb.log(
-                        {
-                            "Validation Image": wandb.Image(
-                                image, caption=f"Epoch {epoch+1}"
-                            )
-                        },
-                        step=epoch + 1,
-                    )
+                    log_encoded_image(model, epoch, inputs)
             log_gaussians(model, epoch)
+            log_dice_score_with_gaussian(model, validationloader, device, epoch)
 
         val_loss = val_running_loss / len(validationloader)
         val_losses.append(val_loss)
@@ -401,6 +384,26 @@ def train_and_validate_autoencoder(
         wandb.log({"epoch": epoch + 1, "validation/loss": val_loss}, step=epoch + 1)
 
     return train_losses, val_losses
+
+
+def log_encoded_image(model, epoch, inputs):
+    encoded_output = model.encoder(inputs)[0].cpu().numpy().squeeze()
+    # Normalize the output image to be in the range [0, 255]
+    if encoded_output.shape[0] == 1:
+        image = np.stack([encoded_output, encoded_output, encoded_output], axis=-1)
+    elif encoded_output.shape[0] == 3:
+        image = encoded_output.transpose(1, 2, 0)
+    image_min = image.min()
+    image_max = image.max()
+
+    image = 255 * (image - image_min) / (image_max - image_min)
+    image = image.astype(np.uint8)
+
+    # Log the RGB image to WandB
+    wandb.log(
+        {"Validation Image": wandb.Image(image, caption=f"Epoch {epoch+1}")},
+        step=epoch + 1,
+    )
 
 
 def log_gaussians(autoencoder, epoch):
@@ -431,11 +434,39 @@ def log_gaussians(autoencoder, epoch):
     plt.close(fig_spectrum)
 
 
+def log_dice_score_with_gaussian(autoencoder, testloader, device, epoch):
+    gcr = autoencoder.encoder
+    segmentation_model = build_segmentation_model(
+        encoder="timm-regnetx_320",
+        architecture="Linknet",
+        device=device,
+        in_channels=gcr.num_output_channels,
+    )
+
+    segmentation_model = load_model(
+        segmentation_model, "./models/segmentation_model.pth", device
+    )
+
+    feature_extractor = FeatureExtractor(segmentation_model).to(device)
+    classifier = Classifier(segmentation_model).to(device)
+    model = SegmentationWithChannelReducerFADA(gcr, feature_extractor, classifier).to(
+        device
+    )
+    precision, _, _, _, dice_score = evaluate_model(
+        model, testloader, device, with_wandb=False
+    )
+    wandb.log({"epoch": epoch + 1, "dice_score": dice_score}, step=epoch + 1)
+    wandb.log({"epoch": epoch + 1, "precision": precision}, step=epoch + 1)
+
+    del model
+    torch.cuda.empty_cache()
+
+
 def train_sweep(config=None):
     with wandb.init(config=config) as run:
         config = wandb.config
         trainloader = build_hsi_dataloader(
-            batch_size=8,
+            batch_size=config.batch_size,
             train_split=1,
             val_split=0,
             test_split=0,
@@ -586,7 +617,7 @@ def build_gaussian_channel_reducer(
 ):
     model = GaussianAutoEncoder(num_input_channels, num_reduced_channels).to(device)
     if load_from_path:
-        model.load_state_dict(torch.load(load_from_path))
+        model = load_model(model, load_from_path, device)
     return model.encoder
 
 
@@ -595,5 +626,5 @@ def build_conv_channel_reducer(
 ):
     model = ConvAutoEncoder(num_input_channels, num_reduced_channels).to(device)
     if load_from_path:
-        model.load_state_dict(torch.load(load_from_path))
+        model = load_model(model, load_from_path, device)
     return model.encoder

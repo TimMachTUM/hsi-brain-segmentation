@@ -521,3 +521,8 @@ def train_sweep(config=None):
 
         del model
         torch.cuda.empty_cache()
+
+def load_model(model, checkpoint_path, device):
+    checkpoint = torch.load(checkpoint_path, map_location=device)
+    model.load_state_dict(checkpoint)
+    return model

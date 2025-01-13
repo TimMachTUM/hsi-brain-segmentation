@@ -16,7 +16,7 @@ from dataset import (
     build_hsi_dataloader,
     build_hsi_testloader,
 )
-from segmentation_util import log_segmentation_example, evaluate_model
+from segmentation_util import load_model, log_segmentation_example, evaluate_model
 from segmentation_util import build_segmentation_model, build_criterion, build_optimizer
 from segmentation_models_pytorch.encoders import get_encoder
 from dimensionality_reduction.autoencoder import (
@@ -83,8 +83,8 @@ def init_model_and_train(
     )
     if "pretrained" in config:
         print(f"Loading pretrained model from {config.pretrained}")
-        segmentation_model.load_state_dict(torch.load(config.pretrained))
-        
+        segmentation_model = load_model(segmentation_model, config.pretrained, device)
+
     reducer = None
     if "gaussian" in config:
         print("Using Gaussian Channel Reduction")
@@ -164,7 +164,7 @@ def init_model_and_train(
                     reducer, feature_extractor, classifier
                 )
             )
-            model.load_state_dict(torch.load(f"./models/{config.model}.pth"))
+            model = load_model(model, f"./models/{config.model}.pth", device)
 
         evaluate_model(model, testloader_target, device)
     return model, train_loss, domain_loss, val_loss_source, val_loss_target

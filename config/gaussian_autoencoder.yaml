@@ -1,0 +1,26 @@
+name: Gaussian-Autoencoder-LearningRate-and-Sigma-Sweep
+method: bayes
+parameters:
+  epochs:
+    value: 15
+  output_channels:
+    value: 3
+  mu:
+    value: [335, 267, 131]
+  sigma:
+    values: 
+      - [1,1,1]
+      - [2,2,2]
+      - [3,3,3]
+      - [4,4,4]
+      - [5,5,5]
+  lr_encoder:
+    min: 0.001
+    max: 0.01
+  lr_decoder:
+    min: 0.0001
+    max: 0.001
+
+metric:
+  name: validation/loss
+  goal: minimize

@@ -1,9 +1,12 @@
+import os
+from matplotlib import pyplot as plt
 import torch
 import torch.nn.functional as F
 import torch.nn as nn
 import wandb
 import numpy as np
 
+from dataset import build_hsi_dataloader, build_hsi_testloader
 from dimensionality_reduction.gaussian import GaussianChannelReduction
 from dimensionality_reduction.conv_reducer import ConvReducer
 
@@ -174,10 +177,12 @@ class VariationalAutoencoder(nn.Module):
 
 
 class GaussianAutoEncoder(nn.Module):
-    def __init__(self, num_input_channels=826, num_reduced_channels=3, priors=None):
+    def __init__(
+        self, num_input_channels=826, num_reduced_channels=3, mu=None, sigma=None
+    ):
         super(GaussianAutoEncoder, self).__init__()
         self.encoder = GaussianChannelReduction(
-            num_input_channels, num_reduced_channels, priors
+            num_input_channels, num_reduced_channels, mu, sigma
         )
         self.decoder = nn.Sequential(
             # Optional: Additional convolutional layers
@@ -225,33 +230,69 @@ def vae_loss(recon_x, x, mu, logvar):
 
 
 def model_pipeline_autoencoder(
-    model,
     trainloader,
     validationloader,
-    criterion,
-    optimizer,
     config,
     project,
     epochs=10,
-    model_name=None,
     device="cuda",
     batch_print=10,
+    save_wandb=True,
 ):
     with wandb.init(project=project, config=config, name=config["model"]):
         config = wandb.config
-        model = model.to(device)
-        train_loss, val_loss = train_and_validate_autoencoder(
-            model,
+        return init_model_and_train(
             trainloader,
             validationloader,
-            criterion,
-            optimizer,
+            config,
             epochs,
-            model_name,
             device,
             batch_print,
+            save_wandb,
         )
-        return model, train_loss, val_loss
+
+
+def init_model_and_train(
+    trainloader,
+    validationloader,
+    config,
+    epochs=10,
+    device="cuda",
+    batch_print=10,
+    save_wandb=True,
+):
+    mu = torch.tensor(config.mu, dtype=torch.float) if "mu" in config else None
+    sigma = torch.tensor(config.sigma, dtype=torch.float) if "sigma" in config else None
+    num_reduced_channels = config.out_channels if "out_channels" in config else 3
+    model = GaussianAutoEncoder(
+        num_input_channels=826,
+        num_reduced_channels=num_reduced_channels,
+        mu=mu,
+        sigma=sigma,
+    ).to(device)
+
+    optimizer = torch.optim.Adam(
+        [
+            {"params": model.encoder.parameters(), "lr": config.lr_encoder},
+            {"params": model.decoder.parameters(), "lr": config.lr_decoder},
+        ]
+    )
+
+    criterion = nn.MSELoss()
+
+    train_loss, val_loss = train_and_validate_autoencoder(
+        model=model,
+        trainloader=trainloader,
+        validationloader=validationloader,
+        criterion=criterion,
+        optimizer=optimizer,
+        epochs=epochs,
+        model_name=config.model,
+        device=device,
+        batch_print=batch_print,
+        save_wandb=save_wandb,
+    )
+    return model, train_loss, val_loss
 
 
 def train_and_validate_autoencoder(
@@ -264,6 +305,7 @@ def train_and_validate_autoencoder(
     model_name=None,
     device="cuda",
     batch_print=10,
+    save_wandb=True,
 ):
     """
     Function to train and validate
@@ -341,6 +383,7 @@ def train_and_validate_autoencoder(
                         },
                         step=epoch + 1,
                     )
+            log_gaussians(model, epoch)
 
         val_loss = val_running_loss / len(validationloader)
         val_losses.append(val_loss)
@@ -349,14 +392,73 @@ def train_and_validate_autoencoder(
             if val_loss < min_val_loss:
                 min_val_loss = val_loss
                 torch.save(model.state_dict(), f"./models/{model_name}.pth")
-                model_artifact = wandb.Artifact(f"{model_name}", type="model")
-                model_artifact.add_file(f"./models/{model_name}.pth")
-                wandb.log_artifact(model_artifact)
+                if save_wandb:
+                    model_artifact = wandb.Artifact(f"{model_name}", type="model")
+                    model_artifact.add_file(f"./models/{model_name}.pth")
+                    wandb.log_artifact(model_artifact)
 
         print(f"Epoch {epoch+1}, Validation Loss: {val_loss:.4f}")
         wandb.log({"epoch": epoch + 1, "validation/loss": val_loss}, step=epoch + 1)
 
     return train_losses, val_losses
+
+
+def log_gaussians(autoencoder, epoch):
+    mu = autoencoder.encoder.mu.cpu()
+    sigma = torch.exp(autoencoder.encoder.log_sigma).cpu()
+    colors = ["r", "g", "b"]
+    fig_spectrum, ax_spectrum = plt.subplots(figsize=(8, 6))
+    channel_indices = torch.arange(826).float()
+
+    for i in range(autoencoder.encoder.num_output_channels):
+        # Compute normalized Gaussian
+        w = torch.exp(-0.5 * ((channel_indices - mu[i]) / sigma[i]) ** 2)
+        w = w / w.sum()  # Normalize
+
+        # Plot on the same x-axis as the pixel spectra
+        ax_spectrum.plot(
+            channel_indices.numpy(),
+            w.numpy(),
+            label=f"G{i+1} (μ={mu[i].item():.2f}, σ={sigma[i].item():.2f})",
+            color=colors[i % len(colors)],
+        )
+    ax_spectrum.set_title("Learned Gaussians")
+    ax_spectrum.set_xlabel("Channel Indices")
+    ax_spectrum.set_ylabel("Normalized Intensity")
+    ax_spectrum.legend()
+
+    wandb.log({"Gaussians": wandb.Image(fig_spectrum)}, step=epoch + 1)
+    plt.close(fig_spectrum)
+
+
+def train_sweep(config=None):
+    with wandb.init(config=config) as run:
+        config = wandb.config
+        trainloader = build_hsi_dataloader(
+            batch_size=8,
+            train_split=1,
+            val_split=0,
+            test_split=0,
+            exclude_labeled_data=True,
+            augmented=True,
+        )[0]
+
+        validationloader = build_hsi_testloader()
+        config["model"] = run.name
+        model, _, _ = init_model_and_train(
+            trainloader,
+            validationloader,
+            config,
+            epochs=config.epochs if "epochs" in config else 10,
+            device=config.device,
+            batch_print=5,
+            save_wandb=False,
+        )
+        del model
+        if os.path.exists(f"./models/{config.model}.pth"):
+            os.remove(f"./models/{config.model}.pth")
+            print(f"Removed model {config.model}.pth")
+        torch.cuda.empty_cache()
 
 
 def train_and_validate_variational_autoencoder(
@@ -486,6 +588,7 @@ def build_gaussian_channel_reducer(
     if load_from_path:
         model.load_state_dict(torch.load(load_from_path))
     return model.encoder
+
 
 def build_conv_channel_reducer(
     num_input_channels=826, num_reduced_channels=3, load_from_path=None, device="cuda"

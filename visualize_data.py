@@ -93,7 +93,7 @@ def show_interactive_image_with_spectrum(image_id=4, gcr_path=None):
             channel_indices = torch.arange(gcr.num_input_channels).float()
             mu = gcr.mu.detach()  # (num_output_channels,)
             sigma = gcr.log_sigma.exp().detach()  # (num_output_channels,)
-            colors = ["b", "g", "r"]
+            colors = ["r", "g", "b"]
 
             for i in range(gcr.num_output_channels):
                 # Compute normalized Gaussian

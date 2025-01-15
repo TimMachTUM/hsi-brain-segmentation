@@ -448,7 +448,7 @@ def log_dice_score_with_gaussian(autoencoder, testloader, device, epoch):
     )
 
     segmentation_model = load_model(
-        segmentation_model, "./models/segmentation_model.pth", device
+        segmentation_model, "models/serene-sweep-9.pth", device
     )
 
     feature_extractor = FeatureExtractor(segmentation_model).to(device)

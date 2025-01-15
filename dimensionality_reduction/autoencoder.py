@@ -234,8 +234,6 @@ def vae_loss(recon_x, x, mu, logvar):
 
 
 def model_pipeline_autoencoder(
-    trainloader,
-    validationloader,
     config,
     project,
     epochs=10,
@@ -245,6 +243,7 @@ def model_pipeline_autoencoder(
 ):
     with wandb.init(project=project, config=config, name=config["model"]):
         config = wandb.config
+        trainloader, validationloader = build_dataloaders(config)
         return init_model_and_train(
             trainloader,
             validationloader,
@@ -265,6 +264,24 @@ def init_model_and_train(
     batch_print=10,
     save_wandb=True,
 ):
+    model, optimizer, criterion = init_training(config, device)
+
+    train_loss, val_loss = train_and_validate_autoencoder(
+        model=model,
+        trainloader=trainloader,
+        validationloader=validationloader,
+        criterion=criterion,
+        optimizer=optimizer,
+        epochs=epochs,
+        model_name=config.model,
+        device=device,
+        batch_print=batch_print,
+        save_wandb=save_wandb,
+    )
+    return model, train_loss, val_loss
+
+
+def init_training(config, device):
     mu = torch.tensor(config.mu, dtype=torch.float) if "mu" in config else None
     sigma = torch.tensor(config.sigma, dtype=torch.float) if "sigma" in config else None
     num_reduced_channels = config.out_channels if "out_channels" in config else 3
@@ -283,20 +300,7 @@ def init_model_and_train(
     )
 
     criterion = nn.MSELoss()
-
-    train_loss, val_loss = train_and_validate_autoencoder(
-        model=model,
-        trainloader=trainloader,
-        validationloader=validationloader,
-        criterion=criterion,
-        optimizer=optimizer,
-        epochs=epochs,
-        model_name=config.model,
-        device=device,
-        batch_print=batch_print,
-        save_wandb=save_wandb,
-    )
-    return model, train_loss, val_loss
+    return model, optimizer, criterion
 
 
 def train_and_validate_autoencoder(
@@ -465,16 +469,7 @@ def log_dice_score_with_gaussian(autoencoder, testloader, device, epoch):
 def train_sweep(config=None):
     with wandb.init(config=config) as run:
         config = wandb.config
-        trainloader = build_hsi_dataloader(
-            batch_size=config.batch_size,
-            train_split=1,
-            val_split=0,
-            test_split=0,
-            exclude_labeled_data=True,
-            augmented=True,
-        )[0]
-
-        validationloader = build_hsi_testloader()
+        trainloader, validationloader = build_dataloaders(config)
         config["model"] = run.name
         model, _, _ = init_model_and_train(
             trainloader,
@@ -490,6 +485,20 @@ def train_sweep(config=None):
             os.remove(f"./models/{config.model}.pth")
             print(f"Removed model {config.model}.pth")
         torch.cuda.empty_cache()
+
+
+def build_dataloaders(config):
+    trainloader = build_hsi_dataloader(
+        batch_size=config.batch_size,
+        train_split=1,
+        val_split=0,
+        test_split=0,
+        exclude_labeled_data=True,
+        augmented=True,
+    )[0]
+
+    validationloader = build_hsi_testloader()
+    return trainloader, validationloader
 
 
 def train_and_validate_variational_autoencoder(
@@ -628,3 +637,12 @@ def build_conv_channel_reducer(
     if load_from_path:
         model = load_model(model, load_from_path, device)
     return model.encoder
+
+
+def build_and_store_gcr(
+    mu, sigma, num_reduced_channels=3, device="cuda", save_path="./models/gcr.pth"
+):
+    mu = torch.tensor(mu, dtype=torch.float)
+    sigma = torch.tensor(sigma, dtype=torch.float)
+    model = GaussianAutoEncoder(826, num_reduced_channels, mu, sigma).to(device)
+    torch.save(model.state_dict(), save_path)

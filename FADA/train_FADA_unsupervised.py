@@ -35,11 +35,6 @@ def soft_label_cross_entropy(pred, soft_label, pixel_weights=None):
 
 
 def model_pipeline(
-    trainloader_source,
-    validationloader_source,
-    testloader_source,
-    trainloader_target,
-    testloader_target,
     config,
     project,
     device="cuda",
@@ -50,6 +45,14 @@ def model_pipeline(
 ):
     with wandb.init(project=project, config=config, name=config["model"]):
         config = wandb.config
+        (
+            trainloader_source,
+            validationloader_source,
+            testloader_source,
+            trainloader_target,
+            testloader_target,
+        ) = initialize_data_loaders(config)
+
         return init_model_and_train(
             trainloader_source,
             validationloader_source,
@@ -78,8 +81,13 @@ def init_model_and_train(
     with_overlays,
     save_wandb=True,
 ):
+    num_classes = config.classes if "classes" in config else 1
     segmentation_model = build_segmentation_model(
-        config.encoder, config.architecture, device, in_channels=config.in_channels
+        config.encoder,
+        config.architecture,
+        device,
+        in_channels=config.in_channels,
+        classes=num_classes,
     )
     if "pretrained" in config:
         print(f"Loading pretrained model from {config.pretrained}")
@@ -108,7 +116,7 @@ def init_model_and_train(
     discriminator = PixelDiscriminator(
         input_nc=get_encoder(config.encoder, config.in_channels).out_channels[-1],
         ndf=config.ndf,
-        num_classes=1,
+        num_classes=num_classes,
     ).to(device)
 
     criterion_segmentation = build_criterion(config.seg_loss)
@@ -206,7 +214,7 @@ def train_and_validate(
         len(trainloader_target),
     )
     # Define the contrastive loss function
-    contrastive_loss_fn = nn.BCEWithLogitsLoss()
+    contrastive_loss_fn = nn.CrossEntropyLoss()
 
     for epoch in range(epochs):
         feature_extractor.train()
@@ -408,40 +416,43 @@ def train_and_validate(
 
     return train_losses, domain_losses, val_losses_source, val_losses_target
 
+def black_ring_loss_only(tgt_pred, black_ring_mask):
+    """
+    tgt_pred: logits of shape [N, 3, H, W]
+    black_ring_mask: binary mask of shape [N, H, W]
+                     (1 = black ring pixel, 0 = unlabeled/other)
+    Returns BCE loss for black ring predictions only.
+    """
+
+    # Extract the logits for the black-ring channel (assuming index=2).
+    # Shape: [N, H, W]
+    black_ring_logits = tgt_pred[:, 2, :, :]
+    pred_black_ring = black_ring_logits[black_ring_mask == 1]
+    pos_weight = torch.tensor([100]).to(black_ring_logits.device)
+    print(pred_black_ring)
+    
+
+    # We can apply binary cross-entropy to these logits 
+    # versus the ground truth black_ring_mask.
+    # 'F.binary_cross_entropy_with_logits' is typically used for single-class segmentation.
+    loss = F.binary_cross_entropy_with_logits(
+        black_ring_logits, 
+        black_ring_mask.float(), 
+        pos_weight=pos_weight
+    )
+    return loss
+
 
 def train_sweep(config=None):
     with wandb.init(config=config) as run:
         config = wandb.config
-        rgb = config.rgb if "rgb" in config else False
-        rgb_channels = (
-            config.rgb_channels if "rgb_channels" in config else (425, 192, 109)
-        )
-        trainloader_source, validationloader_source, testloader_source = (
-            build_FIVES_random_crops_dataloaders(
-                batch_size=config.batch_size_source,
-                num_channels=config.in_channels,
-                load_from_path=config.dataset_path,
-            )
-        )
-        window = config.window if "window" in config else None
-        trainloader_target = build_hsi_dataloader(
-            batch_size=config.batch_size_target,
-            train_split=1,
-            val_split=0,
-            test_split=0,
-            window=window,
-            exclude_labeled_data=True,
-            augmented=config.augmented,
-            rgb=rgb,
-            rgb_channels=rgb_channels,
-        )[0]
-
-        testloader_target = build_hsi_testloader(
-            batch_size=1,
-            window=window,
-            rgb=rgb,
-            rgb_channels=rgb_channels,
-        )
+        (
+            trainloader_source,
+            validationloader_source,
+            testloader_source,
+            trainloader_target,
+            testloader_target,
+        ) = initialize_data_loaders(config)
         config["model"] = run.name
         model, _, _, _, _ = init_model_and_train(
             trainloader_source,
@@ -461,3 +472,47 @@ def train_sweep(config=None):
             os.remove(f"./models/{config.model}.pth")
             print(f"Removed model {config.model}.pth")
         torch.cuda.empty_cache()
+
+
+def initialize_data_loaders(config):
+    rgb = config.rgb if "rgb" in config else False
+    rgb_channels = config.rgb_channels if "rgb_channels" in config else (425, 192, 109)
+    num_classes = config.classes if "classes" in config else 1
+    trainloader_source, validationloader_source, testloader_source = (
+        build_FIVES_random_crops_dataloaders(
+            batch_size=config.batch_size_source,
+            num_channels=config.in_channels,
+            load_from_path=config.dataset_path,
+            classes=num_classes,
+        )
+    )
+    window = config.window if "window" in config else None
+    trainloader_target = build_hsi_dataloader(
+        batch_size=config.batch_size_target,
+        train_split=1,
+        val_split=0,
+        test_split=0,
+        window=window,
+        exclude_labeled_data=True,
+        augmented=config.augmented,
+        rgb=rgb,
+        rgb_channels=rgb_channels,
+        ring_label_dir=config.ring_label_dir if "ring_label_dir" in config else None,
+        classes=num_classes,
+    )[0]
+
+    testloader_target = build_hsi_testloader(
+        batch_size=1,
+        window=window,
+        rgb=rgb,
+        rgb_channels=rgb_channels,
+        classes=num_classes,
+    )
+
+    return (
+        trainloader_source,
+        validationloader_source,
+        testloader_source,
+        trainloader_target,
+        testloader_target,
+    )

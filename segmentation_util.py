@@ -9,6 +9,7 @@ from sklearn.metrics import precision_score
 import cv2
 from typing import Literal
 from ipywidgets import interact, FloatSlider, fixed
+import torch.nn.functional as F
 
 
 def train_and_validate(
@@ -100,17 +101,27 @@ def train_and_validate(
     return train_losses, val_losses
 
 
-def log_segmentation_example(model, data, device, epoch, title="Validation Overlay", channel_reducer=None):
+def log_segmentation_example(
+    model, data, device, epoch, title="Validation Overlay", channel_reducer=None
+):
     inputs, labels = data[0][0], data[1][0].to(device).float()
     prediction = predict(model, inputs, device).squeeze(0).cpu().numpy()
 
     # Convert the labels and prediction to integer masks
-    labels = labels.cpu().numpy().squeeze()
+    class_labels = {
+        0: "Background",
+        1: "Blood Vessel",
+    }
+    if labels.shape[0] == 1:
+        labels = labels.cpu().numpy().squeeze()
+    else:
+        labels = labels.argmax(dim=0).cpu().numpy()
+        class_labels[2] = "Black Ring"  # Hardcoded for contrastive loss approach
 
     # Assuming inputs are in a suitable format (e.g., normalized between 0 and 1 or uint8)
     if channel_reducer:
         inputs = channel_reducer(inputs.unsqueeze(0).to(device)).squeeze(0)
-        
+
     input_image = inputs.cpu().numpy().squeeze()  # Convert to HWC format
     if input_image.shape[0] == 1:  # Grayscale (single channel)
         input_image = np.stack(
@@ -130,17 +141,11 @@ def log_segmentation_example(model, data, device, epoch, title="Validation Overl
     mask_data = {
         "predictions": {
             "mask_data": prediction,  # The predicted mask
-            "class_labels": {
-                0: "Background",
-                1: "Blood Vessel",
-            },  # Change according to your classes
+            "class_labels": class_labels,
         },
         "ground_truth": {
             "mask_data": labels,  # The ground truth mask
-            "class_labels": {
-                0: "Background",
-                1: "Blood Vessel",
-            },  # Change according to your classes
+            "class_labels": class_labels,
         },
     }
 
@@ -169,14 +174,33 @@ def evaluate_model(model, dataloader, device, with_wandb=True, threshold=0.5):
         for i, data in enumerate(dataloader):
             inputs, labels = data[0].to(device), data[1].to(device).int()
             outputs = model(inputs)
-            tp, fp, fn, tn = smp.metrics.get_stats(
-                outputs, labels, mode="binary", threshold=threshold
-            )
+            num_classes = outputs.shape[1]
+            if num_classes == 1:
+                tp, fp, fn, tn = smp.metrics.get_stats(
+                    outputs, labels, mode="binary", threshold=threshold
+                )
+            else:
+                pred_multiclass = torch.argmax(outputs, dim=1)
+                pred_multiclass = F.one_hot(
+                    pred_multiclass, num_classes=num_classes
+                ).permute(0, 3, 1, 2)
+                tp, fp, fn, tn = smp.metrics.get_stats(
+                    pred_multiclass.long(),
+                    labels,
+                    mode="multiclass",
+                    num_classes=num_classes,
+                )
+                labels = torch.argmax(labels, dim=1)
+                pred_multiclass = torch.argmax(pred_multiclass, dim=1)
+                pred_multiclass[pred_multiclass == 2] = 0
+
             recall += smp.metrics.recall(tp, fp, fn, tn, reduction="micro")
             precision += smp.metrics.precision(tp, fp, fn, tn, reduction="micro")
             f1_score += smp.metrics.f1_score(tp, fp, fn, tn, reduction="micro")
             accuracy += smp.metrics.accuracy(tp, fp, fn, tn, reduction="micro")
-            pred = outputs > 0.5
+
+            pred = outputs > 0.5 if num_classes == 1 else pred_multiclass
+
             dice_score += dice_coefficient(pred, labels)
 
     precision /= len(dataloader)
@@ -242,11 +266,17 @@ def predict(model, data, device, with_sigmoid=True, threshold=0.5):
     model.eval()
     data = data.unsqueeze(0).to(device)
     with torch.no_grad():
-        prediction = model(data)
-        if with_sigmoid:
-            prediction = torch.sigmoid(prediction)
-        prediction = (prediction > threshold).float()
-    return prediction.squeeze(1)
+        logits = model(data)
+        out_channels = logits.shape[1]
+        if out_channels == 1:
+            probs = torch.sigmoid(logits) if with_sigmoid else logits
+            prediction = (probs > threshold).float()
+            prediction = prediction.squeeze(1)
+        else:
+            # -- Multi-class segmentation --
+            probs = F.softmax(logits, dim=1)  # (B, out_channels, H, W)
+            prediction = torch.argmax(probs, dim=1)  # (B, H, W)
+    return prediction
 
 
 def show_overlay(
@@ -380,49 +410,54 @@ def build_segmentation_model(
     ] = "Unet",
     device="cuda",
     in_channels=1,
+    classes=1,
 ):
     if architecture == "Unet":
         model = smp.Unet(
-            encoder, encoder_weights=None, in_channels=in_channels, classes=1
+            encoder, encoder_weights=None, in_channels=in_channels, classes=classes
         )
     elif architecture == "UnetPlusPlus":
         model = smp.UnetPlusPlus(
-            encoder, encoder_weights=None, in_channels=in_channels, classes=1
+            encoder, encoder_weights=None, in_channels=in_channels, classes=classes
         )
     elif architecture == "MAnet":
         model = smp.FPN(
-            encoder, encoder_weights=None, in_channels=in_channels, classes=1
+            encoder, encoder_weights=None, in_channels=in_channels, classes=classes
         )
     elif architecture == "Linknet":
         model = smp.Linknet(
-            encoder, encoder_weights=None, in_channels=in_channels, classes=1
+            encoder, encoder_weights=None, in_channels=in_channels, classes=classes
         )
     elif architecture == "FPN":
         model = smp.FPN(
-            encoder, encoder_weights=None, in_channels=in_channels, classes=1
+            encoder, encoder_weights=None, in_channels=in_channels, classes=classes
         )
     elif architecture == "PSPNet":
         model = smp.PSPNet(
-            encoder, encoder_weights=None, in_channels=in_channels, classes=1
+            encoder, encoder_weights=None, in_channels=in_channels, classes=classes
         )
     elif architecture == "DeepLabV3Plus":
         model = smp.DeepLabV3Plus(
-            encoder, encoder_weights=None, in_channels=in_channels, classes=1
+            encoder, encoder_weights=None, in_channels=in_channels, classes=classes
         )
     elif architecture == "PAN":
         model = smp.PAN(
-            encoder, encoder_weights=None, in_channels=in_channels, classes=1
+            encoder, encoder_weights=None, in_channels=in_channels, classes=classes
         )
     return model.to(device)
 
 
-def build_criterion(loss: Literal["Dice", "BCE", "Focal"] = "Dice", gamma=2):
+def build_criterion(
+    loss: Literal["Dice", "BCE", "Focal", "CrossEntropy"] = "Dice", gamma=2
+):
     if loss == "Dice":
         return smp.losses.DiceLoss(mode="binary")
     elif loss == "BCE":
         return torch.nn.BCEWithLogitsLoss()
     elif loss == "Focal":
         return smp.losses.FocalLoss(mode="binary", gamma=gamma)
+    elif loss == "CrossEntropy":
+        return torch.nn.CrossEntropyLoss()
 
 
 def build_optimizer(
@@ -446,11 +481,16 @@ def train_sweep(config=None):
         batch_size = config["batch_size"]
         channels = config["channels"]
         proportion_augmented_data = config["proportion_augmented_data"]
+        classes = config["classes"] if "classes" in config else 1
         if "gamma" in config:
             gamma = config["gamma"]
 
         model = build_segmentation_model(
-            encoder, architecture=architecture, device=device, in_channels=channels
+            encoder,
+            architecture=architecture,
+            device=device,
+            in_channels=channels,
+            classes=classes,
         )
         criterion = build_criterion(loss, gamma=gamma if "gamma" in config else 2)
         optimizer = build_optimizer(
@@ -521,6 +561,7 @@ def train_sweep(config=None):
 
         del model
         torch.cuda.empty_cache()
+
 
 def load_model(model, checkpoint_path, device):
     checkpoint = torch.load(checkpoint_path, map_location=device)

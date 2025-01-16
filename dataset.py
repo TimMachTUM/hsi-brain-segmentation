@@ -18,6 +18,7 @@ from torchvision.transforms import (
     CenterCrop,
     GaussianBlur,
 )
+import torch.nn.functional as F
 import matplotlib.pyplot as plt
 
 spectral.settings.envi_support_nonlowercase_params = True
@@ -86,6 +87,7 @@ class HSIDataset(Dataset):
         rgb=False,
         rgb_channels=(425, 192, 109),
         ring_label_dir=None,
+        classes=1,
     ):
         """
         Initialize the dataset with the path to the data.
@@ -104,6 +106,7 @@ class HSIDataset(Dataset):
         self.rgb = rgb
         self.rgb_channels = rgb_channels
         self.ring_label_dir = ring_label_dir
+        self.classes = classes
         labeled_data = ["004-02", "012-02", "021-01", "027-02", "030-02"]
 
         subdirs = os.listdir(root_dir)
@@ -167,11 +170,11 @@ class HSIDataset(Dataset):
             ring_label_filename = f"{image_dir}.png"
             ring_label_path = os.path.join(self.ring_label_dir, ring_label_filename)
             if os.path.exists(ring_label_path):
-                label = Image.open(ring_label_path).convert("L") 
+                label = Image.open(ring_label_path).convert("L")
             else:
                 label = Image.new("L", (hsi_image.shape[0], hsi_image.shape[1]), 0)
             label = transforms.ToTensor()(label)
-            
+
         else:
             label = spectral.open_image(gt_path).load()
             label = (label.transpose(2, 0, 1) == 3).astype(int)
@@ -278,7 +281,12 @@ class HSIDataset(Dataset):
                 transforms.CenterCrop(224),
             ]
         )
-        self.label_transform = transforms.Compose([transforms.CenterCrop(224)])
+        label_transform_list = [transforms.CenterCrop(224)]
+        if self.classes > 1:
+            label_transform_list.append(OneHotEncodeTransform(self.classes))
+            if self.ring_label_dir is not None:
+                label_transform_list.append(CustomLabelTransform())
+        self.label_transform = transforms.Compose(label_transform_list)
 
     def center_crop(self, image, crop_size):
         """
@@ -405,6 +413,43 @@ class SegmentationDatasetWithRandomCrops(Dataset):
         return center_cropped_image, center_cropped_mask
 
 
+# Custom one-hot encoding transform
+class OneHotEncodeTransform:
+    def __init__(self, num_classes):
+        self.num_classes = num_classes
+
+    def __call__(self, label):
+        """
+        label: Tensor of shape [1, H, W] after ToTensor(),
+               where each pixel is in {0, 1, ..., num_classes-1}.
+        """
+        # Squeeze out the channel dimension to get shape [H, W]
+        label = label.squeeze(0).long()  # (H, W)
+
+        # One-hot encode to [H, W, num_classes]
+        label = F.one_hot(label, num_classes=self.num_classes)
+
+        # Rearrange to [num_classes, H, W]
+        label = label.permute(2, 0, 1).float()
+
+        return label
+
+
+class CustomLabelTransform:
+    """
+    Custom label transform to convert [0, 1, 0] to [0, 0, 1]
+    """
+
+    def __call__(self, label):
+        mask = (label[0] == 0) & (label[1] == 1) & (label[2] == 0)
+        
+        # For those locations, set the second channel to 0 and the third channel to 1.
+        label[1, mask] = 0
+        label[2, mask] = 1
+
+        return label
+
+
 def build_FIVES_random_crops_dataloaders(
     batch_size=8,
     num_channels=1,
@@ -414,6 +459,7 @@ def build_FIVES_random_crops_dataloaders(
     load_from_path=None,
     kernel_size=None,
     sigma=None,
+    classes=1,
 ):
     train_image_path = "./FIVES/train/Original"
     train_label_path = "./FIVES/train/GroundTruth"
@@ -429,7 +475,12 @@ def build_FIVES_random_crops_dataloaders(
 
     else:
         image_transform = Compose([ToTensor()])
-    label_transform = Compose([ToTensor()])
+
+    label_transform = (
+        Compose([ToTensor()])
+        if classes == 1
+        else Compose([ToTensor(), OneHotEncodeTransform(classes)])
+    )
 
     if load_from_path is None:
         random_crop_dataset = SegmentationDatasetWithRandomCrops(
@@ -512,6 +563,7 @@ def build_FIVES_dataloaders(
     width=512,
     height=512,
     cropped=False,
+    classes=1,
 ):
     train_image_path = "./FIVES/train/Original"
     train_label_path = "./FIVES/train/GroundTruth"
@@ -543,18 +595,14 @@ def build_FIVES_dataloaders(
     image_transform = Compose(transforms_list)
 
     # Define transformations for labels, if needed
-    label_transform = Compose(
-        [
-            (
-                CenterCrop((width, height))
-                if cropped
-                else Resize(
-                    (width, height), interpolation=InterpolationMode.NEAREST_EXACT
-                )
-            ),
-            ToTensor(),  # Convert label to a tensor
-        ]
-    )
+    label_transform_list = [
+        (
+            CenterCrop((width, height))
+            if cropped
+            else Resize((width, height), interpolation=InterpolationMode.NEAREST_EXACT)
+        ),
+        ToTensor(),  # Convert label to a tensor
+    ]
 
     augmentation = v2.RandomApply(
         [
@@ -566,8 +614,14 @@ def build_FIVES_dataloaders(
     )
 
     random_crop_image_transform = Compose(random_crop_transform_list)
+    random_crop_label_transform_list = [ToTensor()]
 
-    random_crop_label_transform = Compose([ToTensor()])
+    if classes > 1:
+        label_transform_list.append(OneHotEncodeTransform(classes))
+        random_crop_label_transform_list.append(OneHotEncodeTransform(classes))
+
+    random_crop_label_transform = Compose(random_crop_label_transform_list)
+    label_transform = Compose(label_transform_list)
 
     random_crop_dataset = SegmentationDatasetWithRandomCrops(
         train_image_path,
@@ -692,10 +746,11 @@ def build_hsi_dataloader(
     rgb=False,
     rgb_channels=(425, 192, 109),
     ring_label_dir=None,
+    classes=1,
 ):
     assert not (rgb and window is not None), "If rgb=True, window must be None."
     assert not (window is not None and rgb), "If window is set, rgb must be False."
-    
+
     path = "../../../../mnt/Drive3/ivan/HELICoiD/HSI_Human_Brain_Database_IEEE_Access/"
 
     dataset = HSIDataset(
@@ -706,6 +761,7 @@ def build_hsi_dataloader(
         rgb=rgb,
         rgb_channels=rgb_channels,
         ring_label_dir=ring_label_dir,
+        classes=classes,
     )
     dataset.crop_dataset()
 
@@ -737,6 +793,7 @@ def build_hsi_dataloader(
         rgb=rgb,
         rgb_channels=rgb_channels,
         ring_label_dir=ring_label_dir,
+        classes=classes,
     )
     augmented_dataset.crop_dataset()
 
@@ -765,12 +822,22 @@ def build_hsi_dataloader(
     return trainloader, validationloader, testloader
 
 
-def build_hsi_testloader(window=None, batch_size=1, rgb=False, rgb_channels=(425, 192, 109)):
+def build_hsi_testloader(
+    window=None, batch_size=1, rgb=False, rgb_channels=(425, 192, 109), classes=1
+):
     assert not (rgb and window is not None), "If rgb=True, window must be None."
     assert not (window is not None and rgb), "If window is set, rgb must be False."
-    
+
     path = "./data/helicoid_with_labels"
-    testset = HSIDataset(path, with_gt=True, window=window, with_img=False, rgb=rgb, rgb_channels=rgb_channels)
+    testset = HSIDataset(
+        path,
+        with_gt=True,
+        window=window,
+        with_img=False,
+        rgb=rgb,
+        rgb_channels=rgb_channels,
+        classes=classes,
+    )
     testset.crop_dataset()
     testloader_target = DataLoader(testset, batch_size=batch_size, shuffle=False)
     return testloader_target

@@ -16,11 +16,11 @@ from dataset import (
     build_hsi_dataloader,
     build_hsi_testloader,
 )
+from dimensionality_reduction.gaussian import build_gaussian_channel_reducer
 from segmentation_util import load_model, log_segmentation_example, evaluate_model
 from segmentation_util import build_segmentation_model, build_criterion, build_optimizer
 from segmentation_models_pytorch.encoders import get_encoder
 from dimensionality_reduction.autoencoder import (
-    build_gaussian_channel_reducer,
     build_conv_channel_reducer,
 )
 import os

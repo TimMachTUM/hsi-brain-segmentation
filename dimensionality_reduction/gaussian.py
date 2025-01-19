@@ -1,6 +1,8 @@
 import torch
 import torch.nn as nn
 
+from segmentation_util import load_model
+
 class GaussianChannelReduction(nn.Module):
     def __init__(self, num_input_channels=826, num_output_channels=3, mu=None, sigma=None):
         super(GaussianChannelReduction, self).__init__()
@@ -42,3 +44,31 @@ class GaussianChannelReduction(nn.Module):
         output = (x * weights).sum(dim=2)  # Shape: (batch_size, num_output_channels, H, W)
 
         return output
+
+
+class GaussianAutoEncoder(nn.Module):
+    def __init__(
+        self, num_input_channels=826, num_reduced_channels=3, mu=None, sigma=None
+    ):
+        super(GaussianAutoEncoder, self).__init__()
+        self.encoder = GaussianChannelReduction(
+            num_input_channels, num_reduced_channels, mu, sigma
+        )
+        self.decoder = nn.Sequential(
+            # Optional: Additional convolutional layers
+            nn.Conv2d(num_reduced_channels, num_input_channels, kernel_size=1)
+        )
+
+    def forward(self, x):
+        encoded = self.encoder(x)
+        reconstructed = self.decoder(encoded)
+        return reconstructed
+
+
+def build_gaussian_channel_reducer(
+    num_input_channels=826, num_reduced_channels=3, load_from_path=None, device="cuda"
+):
+    model = GaussianAutoEncoder(num_input_channels, num_reduced_channels).to(device)
+    if load_from_path:
+        model = load_model(model, load_from_path, device)
+    return model.encoder

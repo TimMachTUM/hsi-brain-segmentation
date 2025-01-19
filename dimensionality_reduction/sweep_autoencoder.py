@@ -1,7 +1,7 @@
 import wandb
 import torch
 import sys
-from dimensionality_reduction.autoencoder import train_sweep  
+from dimensionality_reduction.train_autoencoder import train_sweep  
 import yaml
 
 log_file = open("./out/hyperparameter_logs.txt", "w")

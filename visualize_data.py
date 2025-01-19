@@ -5,7 +5,7 @@ import cv2
 import ipywidgets as widgets
 from IPython.display import display
 import torch
-from dimensionality_reduction.autoencoder import build_gaussian_channel_reducer
+from dimensionality_reduction.gaussian import build_gaussian_channel_reducer
 
 
 def show_interactive_image_with_spectrum(image_id=4, gcr_path=None):

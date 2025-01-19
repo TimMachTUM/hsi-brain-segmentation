@@ -127,7 +127,7 @@ class HSIDataset(Dataset):
 
                 if (
                     os.path.exists(raw_path)
-                    and os.path.exists(gt_path)
+                    and (os.path.exists(gt_path) or ring_label_dir is not None)
                     and os.path.exists(img_path)
                 ):
                     self.data_paths.append(
@@ -442,7 +442,7 @@ class CustomLabelTransform:
 
     def __call__(self, label):
         mask = (label[0] == 0) & (label[1] == 1) & (label[2] == 0)
-        
+
         # For those locations, set the second channel to 0 and the third channel to 1.
         label[1, mask] = 0
         label[2, mask] = 1
@@ -823,7 +823,12 @@ def build_hsi_dataloader(
 
 
 def build_hsi_testloader(
-    window=None, batch_size=1, rgb=False, rgb_channels=(425, 192, 109), classes=1
+    window=None,
+    batch_size=1,
+    rgb=False,
+    rgb_channels=(425, 192, 109),
+    classes=1,
+    ring_label_dir=None,
 ):
     assert not (rgb and window is not None), "If rgb=True, window must be None."
     assert not (window is not None and rgb), "If window is set, rgb must be False."
@@ -837,9 +842,28 @@ def build_hsi_testloader(
         rgb=rgb,
         rgb_channels=rgb_channels,
         classes=classes,
+        ring_label_dir=None,
     )
     testset.crop_dataset()
     testloader_target = DataLoader(testset, batch_size=batch_size, shuffle=False)
+    if ring_label_dir is not None:
+        testset_with_ring_labels = HSIDataset(
+            path,
+            with_gt=False,
+            window=window,
+            with_img=False,
+            rgb=rgb,
+            rgb_channels=rgb_channels,
+            classes=classes,
+            ring_label_dir=ring_label_dir,
+            exclude_labeled_data=False,
+        )
+        testset_with_ring_labels.crop_dataset()
+        testloader_ring = DataLoader(
+            testset_with_ring_labels, batch_size=batch_size, shuffle=False
+        )
+        return testloader_target, testloader_ring
+
     return testloader_target
 
 

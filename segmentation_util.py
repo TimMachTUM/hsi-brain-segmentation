@@ -162,6 +162,98 @@ def dice_coefficient(pred, target):
     return (2.0 * intersection + smooth) / (pred.sum() + target.sum() + smooth)
 
 
+def postprocess_predictions(predictions, rings):
+    """
+    Set predictions in the regions specified by `rings` to 0 (background).
+
+    Args:
+        predictions (torch.Tensor): The model predictions (binary or multiclass).
+        rings (torch.Tensor): A mask of the same spatial size as predictions indicating regions to ignore.
+
+    Returns:
+        torch.Tensor: Postprocessed predictions.
+    """
+    predictions[rings == 1] = 0
+    return predictions
+
+def apply_morphological_operations(predictions):
+    """
+    Apply morphological operations to smooth the predictions.
+
+    Args:
+        predictions (torch.Tensor): The binary model predictions.
+
+    Returns:
+        torch.Tensor: Smoothed predictions after morphological operations.
+    """
+    smoothed_predictions = []
+    for prediction in predictions.cpu().numpy():
+        prediction = prediction.astype(np.uint8)  # Convert to uint8 for OpenCV
+        # Apply morphological closing (dilation followed by erosion)
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        closed = cv2.morphologyEx(prediction, cv2.MORPH_CLOSE, kernel)
+        # Apply morphological opening (erosion followed by dilation)
+        opened = cv2.morphologyEx(closed, cv2.MORPH_OPEN, kernel)
+        smoothed_predictions.append(opened)
+    return torch.tensor(smoothed_predictions, device=predictions.device)
+
+def evaluate_model_with_postprocessing(
+    model, dataloader, dataloader_with_rings, device, with_wandb=True, threshold=0.5
+):
+    model.eval()
+    recall = 0
+    precision = 0
+    f1_score = 0
+    accuracy = 0
+    dice_score = 0
+
+    with torch.no_grad():
+        for (i, data), (_, ring_data) in zip(
+            enumerate(dataloader), enumerate(dataloader_with_rings)
+        ):
+            inputs, labels = data[0].to(device), data[1].to(device).int()
+            rings = ring_data[1].to(device).int()
+
+            outputs = model(inputs)
+            predictions = (outputs > threshold).long()
+            predictions = postprocess_predictions(predictions, rings)
+            predictions = apply_morphological_operations(predictions)
+
+            tp, fp, fn, tn = smp.metrics.get_stats(
+                predictions, labels, mode="binary", threshold=threshold
+            )
+
+
+            recall += smp.metrics.recall(tp, fp, fn, tn, reduction="micro")
+            precision += smp.metrics.precision(tp, fp, fn, tn, reduction="micro")
+            f1_score += smp.metrics.f1_score(tp, fp, fn, tn, reduction="micro")
+            accuracy += smp.metrics.accuracy(tp, fp, fn, tn, reduction="micro")
+
+            dice_score += dice_coefficient(predictions, labels)
+
+    precision /= len(dataloader)
+    recall /= len(dataloader)
+    f1_score /= len(dataloader)
+    accuracy /= len(dataloader)
+    dice_score /= len(dataloader)
+
+    if with_wandb:
+        wandb.log(
+            {
+                "test/precision": precision,
+                "test/recall": recall,
+                "test/f1_score": f1_score,
+                "test/accuracy": accuracy,
+                "test/dice_score": dice_score,
+            }
+        )
+
+    print(
+        f"Precision: {precision:.4f}, Recall: {recall:.4f}, F1 Score: {f1_score:.4f}, Dice Score: {dice_score:.4f}, Accuracy: {accuracy:.4f}"
+    )
+    return precision, recall, f1_score, accuracy, dice_score
+
+
 def evaluate_model(model, dataloader, device, with_wandb=True, threshold=0.5):
     model.eval()
     recall = 0
@@ -264,7 +356,7 @@ def model_pipeline(
 def predict(model, data, device, with_sigmoid=True, threshold=0.5):
     model.to(device)
     model.eval()
-    data = data.unsqueeze(0).to(device)
+    data = data.unsqueeze(0).to(device)  # Add batch dimension (B, C, H, W)
     with torch.no_grad():
         logits = model(data)
         out_channels = logits.shape[1]

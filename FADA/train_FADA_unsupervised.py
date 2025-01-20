@@ -17,10 +17,15 @@ from dataset import (
     build_hsi_testloader,
 )
 from dimensionality_reduction.gaussian import build_gaussian_channel_reducer
-from segmentation_util import load_model, log_segmentation_example, evaluate_model
+from segmentation_util import (
+    evaluate_model_with_postprocessing,
+    load_model,
+    log_segmentation_example,
+    evaluate_model,
+)
 from segmentation_util import build_segmentation_model, build_criterion, build_optimizer
 from segmentation_models_pytorch.encoders import get_encoder
-from dimensionality_reduction.autoencoder import (
+from dimensionality_reduction.train_autoencoder import (
     build_conv_channel_reducer,
 )
 import os
@@ -51,6 +56,7 @@ def model_pipeline(
             testloader_source,
             trainloader_target,
             testloader_target,
+            testloader_target_rings,
         ) = initialize_data_loaders(config)
 
         return init_model_and_train(
@@ -59,6 +65,7 @@ def model_pipeline(
             testloader_source,
             trainloader_target,
             testloader_target,
+            testloader_target_rings,
             config,
             device,
             batch_print,
@@ -74,6 +81,7 @@ def init_model_and_train(
     testloader_source,
     trainloader_target,
     testloader_target,
+    testloader_target_rings,
     config,
     device,
     batch_print,
@@ -149,6 +157,7 @@ def init_model_and_train(
         testloader_source,
         trainloader_target,
         testloader_target,
+        testloader_target_rings,
         criterion_segmentation,
         optimizer_fea,
         optimizer_cls,
@@ -173,8 +182,10 @@ def init_model_and_train(
                 )
             )
             model = load_model(model, f"./models/{config.model}.pth", device)
-
-        evaluate_model(model, testloader_target, device)
+        evaluate_model(model, testloader_source, device)
+        evaluate_model_with_postprocessing(
+            model, testloader_target, testloader_target_rings, device
+        )
     return model, train_loss, domain_loss, val_loss_source, val_loss_target
 
 
@@ -187,6 +198,7 @@ def train_and_validate(
     testloader_source,
     trainloader_target,
     testloader_target,
+    testloader_target_rings,
     criterion_segmentation,
     optimizer_fea,
     optimizer_cls,
@@ -339,7 +351,9 @@ def train_and_validate(
         val_running_loss_source = 0.0
         with torch.no_grad():
             # Validation Phase on target data
-            for i, data in enumerate(testloader_target):
+            for (i, data), (_, ring_data) in zip(
+                enumerate(testloader_target), enumerate(testloader_target_rings)
+            ):
                 inputs, labels = data[0].to(device), data[1].to(device).float()
                 outputs = model(inputs)
                 loss = criterion_segmentation(outputs, labels)
@@ -351,6 +365,16 @@ def train_and_validate(
                     epoch,
                     title=f"Validation Overlay HSI {i}",
                     channel_reducer=hsi_reducer,
+                )
+                log_segmentation_example(
+                    model,
+                    data,
+                    device,
+                    epoch,
+                    title=f"Validation Overlay With Postprocessing {i}",
+                    channel_reducer=hsi_reducer,
+                    ring_data=ring_data[1][0].to(device).float(),
+                    with_postprocessing=True,
                 )
 
             # validation phase on source data
@@ -387,9 +411,18 @@ def train_and_validate(
         precision_target, _, _, _, dice_score_target = evaluate_model(
             model, testloader_target, device, with_wandb=False
         )
+        precision_target_postprocessed, _, _, _, dice_score_postprocessed = (
+            evaluate_model_with_postprocessing(
+                model,
+                testloader_target,
+                testloader_target_rings,
+                device,
+                with_wandb=False,
+            )
+        )
         if model_name:
-            if dice_score_target > highest_dice:
-                highest_dice = dice_score_target
+            if dice_score_postprocessed > highest_dice:
+                highest_dice = dice_score_postprocessed
                 torch.save(model.state_dict(), f"./models/{model_name}.pth")
                 if save_wandb:
                     model_artifact = wandb.Artifact(f"{model_name}", type="model")
@@ -411,10 +444,25 @@ def train_and_validate(
         wandb.log(
             {"epoch": epoch + 1, "dice_score/target": dice_score_target}, step=epoch + 1
         )
+        wandb.log(
+            {
+                "epoch": epoch + 1,
+                "precision/target_postprocessed": precision_target_postprocessed,
+            },
+            step=epoch + 1,
+        )
+        wandb.log(
+            {
+                "epoch": epoch + 1,
+                "dice_score/target_postprocessed": dice_score_postprocessed,
+            },
+            step=epoch + 1,
+        )
 
         del model
 
     return train_losses, domain_losses, val_losses_source, val_losses_target
+
 
 def black_ring_loss_only(tgt_pred, black_ring_mask):
     """
@@ -430,15 +478,12 @@ def black_ring_loss_only(tgt_pred, black_ring_mask):
     pred_black_ring = black_ring_logits[black_ring_mask == 1]
     pos_weight = torch.tensor([100]).to(black_ring_logits.device)
     print(pred_black_ring)
-    
 
-    # We can apply binary cross-entropy to these logits 
+    # We can apply binary cross-entropy to these logits
     # versus the ground truth black_ring_mask.
     # 'F.binary_cross_entropy_with_logits' is typically used for single-class segmentation.
     loss = F.binary_cross_entropy_with_logits(
-        black_ring_logits, 
-        black_ring_mask.float(), 
-        pos_weight=pos_weight
+        black_ring_logits, black_ring_mask.float(), pos_weight=pos_weight
     )
     return loss
 
@@ -446,20 +491,22 @@ def black_ring_loss_only(tgt_pred, black_ring_mask):
 def train_sweep(config=None):
     with wandb.init(config=config) as run:
         config = wandb.config
+        config["model"] = run.name
         (
             trainloader_source,
             validationloader_source,
             testloader_source,
             trainloader_target,
             testloader_target,
+            testloader_target_rings,
         ) = initialize_data_loaders(config)
-        config["model"] = run.name
         model, _, _, _, _ = init_model_and_train(
             trainloader_source,
             validationloader_source,
             testloader_source,
             trainloader_target,
             testloader_target,
+            testloader_target_rings,
             config,
             device=config.device,
             batch_print=10,
@@ -467,11 +514,35 @@ def train_sweep(config=None):
             with_overlays=True,
             save_wandb=False,
         )
-        del model
-        if os.path.exists(f"./models/{config.model}.pth"):
-            os.remove(f"./models/{config.model}.pth")
-            print(f"Removed model {config.model}.pth")
+        _, _, _, _, dice_score = evaluate_model_with_postprocessing(
+            model,
+            testloader_target,
+            testloader_target_rings,
+            config.device,
+            with_wandb=False,
+        )
+        api = wandb.Api()
+        sweep = api.sweep(run.sweep_id)
+        best_run = sweep.best_run(order="test/dice_score_postprocessed")
+        current_best_dice = best_run.summary.get("best_dice", float("-inf"))
+        
+        if dice_score > current_best_dice:
+            print(f"New best dice score: {dice_score} found in run {run.name}")
+            previous_best_model = best_run.summary.get("best_model_name", None)
+            if previous_best_model and os.path.exists(
+                f"./models/{previous_best_model}.pth"
+            ):
+                os.remove(f"./models/{previous_best_model}.pth")
+                print(f"Removed model {previous_best_model}.pth")
+
+            run.summary["best_dice"] = dice_score
+            run.summary["best_model_name"] = config.model
+        else:
+            if os.path.exists(f"./models/{config.model}.pth"):
+                os.remove(f"./models/{config.model}.pth")
+                print(f"Removed non-best model {config.model}.pth")
         torch.cuda.empty_cache()
+        del model
 
 
 def initialize_data_loaders(config):
@@ -501,12 +572,13 @@ def initialize_data_loaders(config):
         classes=num_classes,
     )[0]
 
-    testloader_target = build_hsi_testloader(
+    testloader_target, testloader_target_rings = build_hsi_testloader(
         batch_size=1,
         window=window,
         rgb=rgb,
         rgb_channels=rgb_channels,
         classes=num_classes,
+        ring_label_dir="data/helicoid_ring_labels",
     )
 
     return (
@@ -515,4 +587,5 @@ def initialize_data_loaders(config):
         testloader_source,
         trainloader_target,
         testloader_target,
+        testloader_target_rings,
     )

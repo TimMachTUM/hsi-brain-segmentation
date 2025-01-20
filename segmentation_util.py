@@ -102,10 +102,21 @@ def train_and_validate(
 
 
 def log_segmentation_example(
-    model, data, device, epoch, title="Validation Overlay", channel_reducer=None
+    model,
+    data,
+    device,
+    epoch,
+    title="Validation Overlay",
+    channel_reducer=None,
+    ring_data=None,
+    with_postprocessing=False,
 ):
     inputs, labels = data[0][0], data[1][0].to(device).float()
-    prediction = predict(model, inputs, device).squeeze(0).cpu().numpy()
+    prediction = predict(model, inputs, device)
+    if with_postprocessing:
+        if ring_data is not None:
+            prediction = remove_rings_from_predictions(prediction, ring_data)
+        prediction = apply_morphological_operations(prediction)
 
     # Convert the labels and prediction to integer masks
     class_labels = {
@@ -137,6 +148,8 @@ def log_segmentation_example(
     input_image = 255 * (input_image - image_min) / (image_max - image_min)
     input_image = input_image.astype(np.uint8)  # Convert to uint8 after scaling
 
+    prediction = prediction.squeeze(0).cpu().numpy()
+
     # Prepare the masks for wandb logging
     mask_data = {
         "predictions": {
@@ -162,7 +175,7 @@ def dice_coefficient(pred, target):
     return (2.0 * intersection + smooth) / (pred.sum() + target.sum() + smooth)
 
 
-def postprocess_predictions(predictions, rings):
+def remove_rings_from_predictions(predictions, rings):
     """
     Set predictions in the regions specified by `rings` to 0 (background).
 
@@ -175,6 +188,7 @@ def postprocess_predictions(predictions, rings):
     """
     predictions[rings == 1] = 0
     return predictions
+
 
 def apply_morphological_operations(predictions):
     """
@@ -197,6 +211,7 @@ def apply_morphological_operations(predictions):
         smoothed_predictions.append(opened)
     return torch.tensor(smoothed_predictions, device=predictions.device)
 
+
 def evaluate_model_with_postprocessing(
     model, dataloader, dataloader_with_rings, device, with_wandb=True, threshold=0.5
 ):
@@ -216,13 +231,12 @@ def evaluate_model_with_postprocessing(
 
             outputs = model(inputs)
             predictions = (outputs > threshold).long()
-            predictions = postprocess_predictions(predictions, rings)
+            predictions = remove_rings_from_predictions(predictions, rings)
             predictions = apply_morphological_operations(predictions)
 
             tp, fp, fn, tn = smp.metrics.get_stats(
                 predictions, labels, mode="binary", threshold=threshold
             )
-
 
             recall += smp.metrics.recall(tp, fp, fn, tn, reduction="micro")
             precision += smp.metrics.precision(tp, fp, fn, tn, reduction="micro")
@@ -240,11 +254,11 @@ def evaluate_model_with_postprocessing(
     if with_wandb:
         wandb.log(
             {
-                "test/precision": precision,
-                "test/recall": recall,
-                "test/f1_score": f1_score,
-                "test/accuracy": accuracy,
-                "test/dice_score": dice_score,
+                "test/precision_postprocessed": precision,
+                "test/recall_postprocessed": recall,
+                "test/f1_score_postprocessed": f1_score,
+                "test/accuracy_postprocessed": accuracy,
+                "test/dice_score_postprocessed": dice_score,
             }
         )
 
@@ -394,8 +408,9 @@ def show_overlay(
     )
 
 
-def show_interactive_overlay(model, data, device, title):
-    image = data[2]
+def show_interactive_overlay(model, data, device, title, ring_data=None):
+    image = get_image_from_hsi(data)
+
     labels = data[1]
     model.to(device)
     model.eval()
@@ -419,6 +434,8 @@ def show_interactive_overlay(model, data, device, title):
         prediction = prediction.squeeze(1)
 
         prediction_np = prediction.cpu().numpy().squeeze(0)
+        if ring_data is not None:
+            prediction_np[ring_data.cpu().squeeze(0) == 1] = 0
         _plot_overlay(
             title, with_precision, with_postprocessing, image, labels, prediction_np
         )
@@ -437,6 +454,29 @@ def show_interactive_overlay(model, data, device, title):
         prediction=fixed(prediction),
         title=title,
     )
+
+
+def get_image_from_hsi(data):
+    image = data[0].cpu().numpy().squeeze()
+    # Example: picking 3 channels by index (replace with your real channel selection or Gaussian)
+    if data[0].shape[0] == 1:
+        input_image = np.stack(
+            [image, image, image], axis=-1
+        )  # Convert to 3-channel grayscale RGB
+    else:
+        input_image = np.stack(
+            [
+                image[425, :, :],
+                image[192, :, :],
+                image[109, :, :],
+            ],
+            axis=-1,
+        )  # Convert to 3-channel grayscale
+
+    image_min, image_max = input_image.min(), input_image.max()
+    input_image = 255 * (input_image - image_min) / (image_max - image_min)
+    input_image = input_image.astype(np.uint8)
+    return input_image
 
 
 def _plot_overlay(
@@ -459,10 +499,13 @@ def _plot_overlay(
 
     if with_precision:
         precision = precision_score(labels_np.flatten(), prediction_np.flatten())
+        dice_score = dice_coefficient(prediction_np, labels_np)
         if title:
             title += f" - Precision: {precision:.2f}"
+            title += f" - Dice Score: {dice_score:.2f}"
         else:
             title = f"Precision: {precision:.2f}"
+            title += f" - Dice Score: {dice_score:.2f}"
 
     plt.figure(figsize=(10, 10))
     plt.imshow(combined)

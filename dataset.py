@@ -829,6 +829,7 @@ def build_hsi_testloader(
     rgb_channels=(425, 192, 109),
     classes=1,
     ring_label_dir=None,
+    choose_indices=[0, 1, 2, 3, 4],
 ):
     assert not (rgb and window is not None), "If rgb=True, window must be None."
     assert not (window is not None and rgb), "If window is set, rgb must be False."
@@ -845,7 +846,9 @@ def build_hsi_testloader(
         ring_label_dir=None,
     )
     testset.crop_dataset()
-    testloader_target = DataLoader(testset, batch_size=batch_size, shuffle=False)
+    testloader_target = DataLoader(
+        Subset(testset, choose_indices), batch_size=batch_size, shuffle=False
+    )
     if ring_label_dir is not None:
         testset_with_ring_labels = HSIDataset(
             path,
@@ -860,7 +863,9 @@ def build_hsi_testloader(
         )
         testset_with_ring_labels.crop_dataset()
         testloader_ring = DataLoader(
-            testset_with_ring_labels, batch_size=batch_size, shuffle=False
+            Subset(testset_with_ring_labels, choose_indices),
+            batch_size=batch_size,
+            shuffle=False,
         )
         return testloader_target, testloader_ring
 

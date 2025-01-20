@@ -90,6 +90,9 @@ def init_model_and_train(
     save_wandb=True,
 ):
     num_classes = config.classes if "classes" in config else 1
+    choose_indices = (
+        config.choose_indices if "choose_indices" in config else [0, 1, 2, 3, 4]
+    )
     segmentation_model = build_segmentation_model(
         config.encoder,
         config.architecture,
@@ -171,6 +174,7 @@ def init_model_and_train(
         save_wandb=save_wandb,
         with_contrastive_loss=with_contrastive_loss,
         penalize_rings_weight=penalize_rings_weight,
+        choose_indices=choose_indices,
     )
     if evaluate:
         if config.model:
@@ -182,7 +186,7 @@ def init_model_and_train(
                 )
             )
             model = load_model(model, f"./models/{config.model}.pth", device)
-        evaluate_model(model, testloader_source, device)
+        evaluate_model(model, testloader_target, device)
         evaluate_model_with_postprocessing(
             model, testloader_target, testloader_target_rings, device
         )
@@ -212,6 +216,7 @@ def train_and_validate(
     save_wandb=True,
     with_contrastive_loss=False,
     penalize_rings_weight=0.25,
+    choose_indices=[0, 1, 2, 3, 4],
 ):
     train_losses, domain_losses, val_losses_source, val_losses_target = [], [], [], []
     highest_dice = 0
@@ -363,7 +368,7 @@ def train_and_validate(
                     data,
                     device,
                     epoch,
-                    title=f"Validation Overlay HSI {i}",
+                    title=f"Validation Overlay HSI {choose_indices[i]}",
                     channel_reducer=hsi_reducer,
                 )
                 log_segmentation_example(
@@ -371,7 +376,7 @@ def train_and_validate(
                     data,
                     device,
                     epoch,
-                    title=f"Validation Overlay With Postprocessing {i}",
+                    title=f"Validation Overlay With Postprocessing {choose_indices[i]}",
                     channel_reducer=hsi_reducer,
                     ring_data=ring_data[1][0].to(device).float(),
                     with_postprocessing=True,
@@ -525,7 +530,7 @@ def train_sweep(config=None):
         sweep = api.sweep(run.sweep_id)
         best_run = sweep.best_run(order="test/dice_score_postprocessed")
         current_best_dice = best_run.summary.get("best_dice", float("-inf"))
-        
+
         if dice_score > current_best_dice:
             print(f"New best dice score: {dice_score} found in run {run.name}")
             previous_best_model = best_run.summary.get("best_model_name", None)
@@ -549,6 +554,9 @@ def initialize_data_loaders(config):
     rgb = config.rgb if "rgb" in config else False
     rgb_channels = config.rgb_channels if "rgb_channels" in config else (425, 192, 109)
     num_classes = config.classes if "classes" in config else 1
+    choose_indices = (
+        config.choose_indices if "choose_indices" in config else [0, 1, 2, 3, 4]
+    )
     trainloader_source, validationloader_source, testloader_source = (
         build_FIVES_random_crops_dataloaders(
             batch_size=config.batch_size_source,
@@ -579,6 +587,7 @@ def initialize_data_loaders(config):
         rgb_channels=rgb_channels,
         classes=num_classes,
         ring_label_dir="data/helicoid_ring_labels",
+        choose_indices=choose_indices,
     )
 
     return (

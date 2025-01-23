@@ -17,6 +17,7 @@ from dataset import (
     build_hsi_testloader,
 )
 from dimensionality_reduction.gaussian import build_gaussian_channel_reducer
+from dimensionality_reduction.window_reducer import build_window_reducer
 from segmentation_util import (
     evaluate_model_with_postprocessing,
     load_model,
@@ -121,6 +122,9 @@ def init_model_and_train(
             load_from_path=config.conv_reducer,
             device=device,
         )
+    elif "window_reducer" in config:
+        print("Using Window Channel Reduction")
+        reducer = build_window_reducer(config.window_reducer, device)
 
     feature_extractor = FeatureExtractor(segmentation_model).to(device)
     classifier = Classifier(segmentation_model).to(device)

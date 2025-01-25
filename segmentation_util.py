@@ -1,15 +1,18 @@
+import os
 import torch
 import segmentation_models_pytorch as smp
 import wandb
 import numpy as np
 import cv2
 import matplotlib.pyplot as plt
-from dataset import build_FIVES_dataloaders
+from dataset import build_FIVES_dataloaders, build_hsi_testloader
 from sklearn.metrics import precision_score
 import cv2
 from typing import Literal
 from ipywidgets import interact, FloatSlider, fixed
 import torch.nn.functional as F
+
+from dimensionality_reduction.window_reducer import build_window_reducer
 
 
 def train_and_validate(
@@ -531,6 +534,72 @@ def show_training_step(output, image):
     plt.show()
 
 
+def get_model_paths(directory):
+    """
+    Given a directory structure, return a dictionary where the keys are the image indices
+    and the values are the paths to the corresponding model files.
+
+    Args:
+        directory (str): The base directory containing the models.
+
+    Returns:
+        dict: A dictionary mapping image indices to model file paths.
+    """
+    model_paths = {}
+
+    for subdir, _, files in os.walk(directory):
+        for file in files:
+            # Extract the image index from the directory name
+            parts = os.path.normpath(subdir).split(os.sep)
+            if len(parts) >= 2:  # Ensure the directory structure is as expected
+                try:
+                    image_index = int(parts[-1].replace("image", ""))
+                    model_paths[image_index] = os.path.join(subdir, file)
+                except ValueError:
+                    # Skip directories that don't match the expected format
+                    continue
+
+    return dict(sorted(model_paths.items()))
+
+
+def cross_testing(model_directory, device, build_func, model_params, window=None):
+    model_paths = get_model_paths(model_directory)
+    total_precision = 0
+    total_recall = 0
+    total_accuracy = 0
+    total_dice_score = 0
+    for image_index, model_path in model_paths.items():
+        test_indices = list({0, 1, 2, 3, 4} - {image_index})
+        testloader, testloader_ring_dir = build_hsi_testloader(
+            window=window,
+            batch_size=1,
+            ring_label_dir="./data/helicoid_ring_labels",
+            choose_indices=test_indices,
+        )
+        model_params["path"] = model_path
+        model_params["device"] = device
+        model = build_func(**model_params)
+        print(
+            f"Testing model {model_path} hyperparameter-finetuned on image {image_index} testing on images {test_indices}"
+        )
+        precision, recall, _, accuracy, dice_score = evaluate_model_with_postprocessing(
+            model, testloader, testloader_ring_dir, device, with_wandb=False
+        )
+
+        total_accuracy += accuracy
+        total_precision += precision
+        total_recall += recall
+        total_dice_score += dice_score
+    total_accuracy /= len(model_paths)
+    total_precision /= len(model_paths)
+    total_recall /= len(model_paths)
+    total_dice_score /= len(model_paths)
+    print(
+        f"Average Precision: {total_precision:.4f}, Average Recall: {total_recall:.4f}, Average Accuracy: {total_accuracy:.4f}, Average Dice Score: {total_dice_score:.4f}"
+    )
+    return total_precision, total_recall, total_accuracy, total_dice_score
+
+
 def build_segmentation_model(
     encoder,
     architecture: Literal[
@@ -546,6 +615,7 @@ def build_segmentation_model(
     device="cuda",
     in_channels=1,
     classes=1,
+    path=None,
 ):
     if architecture == "Unet":
         model = smp.Unet(
@@ -579,6 +649,8 @@ def build_segmentation_model(
         model = smp.PAN(
             encoder, encoder_weights=None, in_channels=in_channels, classes=classes
         )
+    if path is not None:
+        model = load_model(model, path, device)
     return model.to(device)
 
 

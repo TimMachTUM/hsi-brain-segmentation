@@ -11,6 +11,7 @@ import cv2
 from typing import Literal
 from ipywidgets import interact, FloatSlider, fixed
 import torch.nn.functional as F
+from monai.losses.cldice import SoftDiceclDiceLoss
 
 from dimensionality_reduction.window_reducer import build_window_reducer
 
@@ -26,6 +27,7 @@ def train_and_validate(
     device="cuda",
     batch_print=10,
     with_overlays=False,
+    save_to_wandb=False,
 ):
     """
     Function to train and validate
@@ -92,9 +94,10 @@ def train_and_validate(
             if dice_score > highest_dice:
                 highest_dice = dice_score
                 torch.save(model.state_dict(), f"./models/{model_name}.pth")
-                model_artifact = wandb.Artifact(f"{model_name}", type="model")
-                model_artifact.add_file(f"./models/{model_name}.pth")
-                wandb.log_artifact(model_artifact)
+                if save_to_wandb:
+                    model_artifact = wandb.Artifact(f"{model_name}", type="model")
+                    model_artifact.add_file(f"./models/{model_name}.pth")
+                    wandb.log_artifact(model_artifact)
 
         print(f"Epoch {epoch+1}, Validation Loss: {val_loss:.4f}")
         wandb.log({"epoch": epoch + 1, "validation/loss": val_loss}, step=epoch + 1)
@@ -212,6 +215,7 @@ def apply_morphological_operations(predictions):
         # Apply morphological opening (erosion followed by dilation)
         opened = cv2.morphologyEx(closed, cv2.MORPH_OPEN, kernel)
         smoothed_predictions.append(opened)
+    smoothed_predictions = np.array(smoothed_predictions)
     return torch.tensor(smoothed_predictions, device=predictions.device)
 
 
@@ -348,6 +352,7 @@ def model_pipeline(
     batch_print=10,
     evaluate=True,
     with_overlays=False,
+    save_to_wandb=False,
 ):
     with wandb.init(project=project, config=config, name=model_name):
         config = wandb.config
@@ -362,6 +367,7 @@ def model_pipeline(
             device,
             batch_print,
             with_overlays,
+            save_to_wandb
         )
         if evaluate:
             if model_name:
@@ -562,8 +568,7 @@ def get_model_paths(directory):
     return dict(sorted(model_paths.items()))
 
 
-def cross_testing(model_directory, device, build_func, model_params, window=None):
-    model_paths = get_model_paths(model_directory)
+def cross_testing(model_paths, device, build_func, model_params, window=None):
     total_precision = 0
     total_recall = 0
     total_accuracy = 0
@@ -598,6 +603,26 @@ def cross_testing(model_directory, device, build_func, model_params, window=None
         f"Average Precision: {total_precision:.4f}, Average Recall: {total_recall:.4f}, Average Accuracy: {total_accuracy:.4f}, Average Dice Score: {total_dice_score:.4f}"
     )
     return total_precision, total_recall, total_accuracy, total_dice_score
+
+
+def build_ensemble_model(path, device):
+    """
+    Builds and loads an ensemble model from a saved file.
+
+    Args:
+        ensemble_path (str): The path to the saved ensemble model file.
+        device (str): The device to move the model to (e.g., "cuda:1").
+
+    Returns:
+        nn.Module: The loaded ensemble model on the specified device.
+    """
+    # Load the saved ensemble model directly
+    ensemble_model = torch.load(path, map_location=device)
+
+    # Move the ensemble model to the specified device
+    ensemble_model = ensemble_model.to(device)
+
+    return ensemble_model
 
 
 def build_segmentation_model(
@@ -655,7 +680,11 @@ def build_segmentation_model(
 
 
 def build_criterion(
-    loss: Literal["Dice", "BCE", "Focal", "CrossEntropy"] = "Dice", gamma=2
+    loss: Literal["Dice", "BCE", "Focal", "CrossEntropy", "ClDice"] = "Dice",
+    gamma=2,
+    iter=3,
+    alpha=0.5,
+    smooth=1,
 ):
     if loss == "Dice":
         return smp.losses.DiceLoss(mode="binary")
@@ -665,6 +694,17 @@ def build_criterion(
         return smp.losses.FocalLoss(mode="binary", gamma=gamma)
     elif loss == "CrossEntropy":
         return torch.nn.CrossEntropyLoss()
+    elif loss == "ClDice":
+        class ClDiceWrapper(torch.nn.Module):
+            def __init__(self, criterion):
+                super().__init__()
+                self.criterion = criterion
+
+            def forward(self, outputs, labels):
+                outputs = torch.sigmoid(outputs)  # Apply sigmoid first
+                return self.criterion(labels, outputs)  # Swap labels and outputs
+
+        return ClDiceWrapper(SoftDiceclDiceLoss(iter_=iter, alpha=alpha, smooth=smooth))
 
 
 def build_optimizer(
@@ -689,8 +729,11 @@ def train_sweep(config=None):
         channels = config["channels"]
         proportion_augmented_data = config["proportion_augmented_data"]
         classes = config["classes"] if "classes" in config else 1
-        if "gamma" in config:
-            gamma = config["gamma"]
+        iter = config["iter"] if "iter" in config else 3
+        alpha = config["alpha"] if "alpha" in config else 0.5
+        smooth = config["smooth"] if "smooth" in config else 1
+        gamma = config["gamma"] if "gamma" in config else 2
+        
 
         model = build_segmentation_model(
             encoder,
@@ -699,7 +742,7 @@ def train_sweep(config=None):
             in_channels=channels,
             classes=classes,
         )
-        criterion = build_criterion(loss, gamma=gamma if "gamma" in config else 2)
+        criterion = build_criterion(loss, gamma=gamma, iter=iter, alpha=alpha, smooth=smooth)
         optimizer = build_optimizer(
             model, learning_rate=learning_rate, optimizer=optimizer
         )
@@ -712,6 +755,7 @@ def train_sweep(config=None):
         )
 
         train_losses, val_losses = [], []
+        highest_dice = 0
 
         for epoch in range(epochs):
             model.train()
@@ -763,8 +807,9 @@ def train_sweep(config=None):
             wandb.log({"epoch": epoch + 1, "precision": precision}, step=epoch + 1)
             wandb.log({"epoch": epoch + 1, "dice_score": dice_score}, step=epoch + 1)
 
-            if dice_score > 0.8:
-                torch.save(model.state_dict(), f"./models/{run.name}.pth")
+            if dice_score > highest_dice and dice_score > 0.8:
+                highest_dice = dice_score
+                torch.save(model.state_dict(), f"./models/FIVES_sweep/{run.name}.pth")
 
         del model
         torch.cuda.empty_cache()

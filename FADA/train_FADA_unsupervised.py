@@ -580,7 +580,7 @@ def initialize_data_loaders(config):
         augmented=config.augmented,
         rgb=rgb,
         rgb_channels=rgb_channels,
-        ring_label_dir=config.ring_label_dir if "ring_label_dir" in config else None,
+        ring_label_dir="data/helicoid_ring_labels",
         classes=num_classes,
     )[0]
 

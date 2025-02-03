@@ -3,7 +3,7 @@ import torch.nn as nn
 from FADA.classifier import Classifier
 from FADA.feature_extractor import FeatureExtractor
 from dimensionality_reduction.gaussian import build_gaussian_channel_reducer
-from dimensionality_reduction.window_reducer import build_window_reducer
+from dimensionality_reduction.window_reducer import build_window_reducer, build_single_window_reducer
 from segmentation_util import build_segmentation_model, load_model
 
 
@@ -74,6 +74,29 @@ def build_FADA_segmentation_model(
     model = load_model(model, path, device)
     return model
 
+
+def build_FADA_segmentation_model_with_single_window_reducer(
+    architecture,
+    encoder,
+    path,
+    device,
+    window_in_nm,
+):
+    segmentation_model = build_segmentation_model(
+        architecture=architecture,
+        encoder=encoder,
+        device=device,
+        in_channels=1,
+    )
+    feature_extractor = FeatureExtractor(segmentation_model).to(device)
+    classifier = Classifier(segmentation_model).to(device)
+    window_reducer = build_single_window_reducer(
+        window_in_nm=window_in_nm, device=device
+    )
+    model = SegmentationModelFADA(feature_extractor, classifier).to(device)
+    model = load_model(model, path, device)
+    combined_model = nn.Sequential(window_reducer, model).to(device)
+    return combined_model
 
 def build_baseline_segmentation_model_with_window_reducer(
     encoder,

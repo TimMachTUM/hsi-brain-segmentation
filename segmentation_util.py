@@ -13,7 +13,7 @@ from ipywidgets import interact, FloatSlider, fixed
 import torch.nn.functional as F
 from monai.losses.cldice import SoftDiceclDiceLoss
 
-from dimensionality_reduction.window_reducer import build_window_reducer
+from FADA.feature_extractor import FeatureExtractorWithConvReducer
 
 
 def train_and_validate(
@@ -138,6 +138,11 @@ def log_segmentation_example(
     # Assuming inputs are in a suitable format (e.g., normalized between 0 and 1 or uint8)
     if channel_reducer:
         inputs = channel_reducer(inputs.unsqueeze(0).to(device)).squeeze(0)
+        
+    if isinstance(model.feature_extractor, FeatureExtractorWithConvReducer):
+        inputs = model.feature_extractor.reduce_for_visualization(
+            inputs.unsqueeze(0).to(device)
+        ).squeeze(0)
 
     input_image = inputs.cpu().numpy().squeeze()  # Convert to HWC format
     if input_image.shape[0] == 1:  # Grayscale (single channel)
@@ -367,7 +372,7 @@ def model_pipeline(
             device,
             batch_print,
             with_overlays,
-            save_to_wandb
+            save_to_wandb,
         )
         if evaluate:
             if model_name:
@@ -695,6 +700,7 @@ def build_criterion(
     elif loss == "CrossEntropy":
         return torch.nn.CrossEntropyLoss()
     elif loss == "ClDice":
+
         class ClDiceWrapper(torch.nn.Module):
             def __init__(self, criterion):
                 super().__init__()
@@ -733,7 +739,6 @@ def train_sweep(config=None):
         alpha = config["alpha"] if "alpha" in config else 0.5
         smooth = config["smooth"] if "smooth" in config else 1
         gamma = config["gamma"] if "gamma" in config else 2
-        
 
         model = build_segmentation_model(
             encoder,
@@ -742,7 +747,9 @@ def train_sweep(config=None):
             in_channels=channels,
             classes=classes,
         )
-        criterion = build_criterion(loss, gamma=gamma, iter=iter, alpha=alpha, smooth=smooth)
+        criterion = build_criterion(
+            loss, gamma=gamma, iter=iter, alpha=alpha, smooth=smooth
+        )
         optimizer = build_optimizer(
             model, learning_rate=learning_rate, optimizer=optimizer
         )

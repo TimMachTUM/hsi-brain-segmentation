@@ -9,9 +9,8 @@ from FADA.segmentation_model import (
 )
 from FADA.discriminator import PixelDiscriminator
 from FADA.classifier import Classifier
-from FADA.feature_extractor import FeatureExtractor
+from FADA.feature_extractor import FeatureExtractor, FeatureExtractorWithConvReducer
 from dataset import (
-    HSIDataset,
     build_FIVES_random_crops_dataloaders,
     build_hsi_dataloader,
     build_hsi_testloader,
@@ -48,6 +47,7 @@ def model_pipeline(
     evaluate=True,
     with_overlays=False,
     save_wandb=True,
+    save_path='models',
 ):
     with wandb.init(project=project, config=config, name=config["model"]):
         config = wandb.config
@@ -73,6 +73,7 @@ def model_pipeline(
             evaluate,
             with_overlays,
             save_wandb=save_wandb,
+            save_path=save_path,
         )
 
 
@@ -89,6 +90,7 @@ def init_model_and_train(
     evaluate,
     with_overlays,
     save_wandb=True,
+    save_path='models',
 ):
     num_classes = config.classes if "classes" in config else 1
     choose_indices = (
@@ -126,7 +128,24 @@ def init_model_and_train(
         print("Using Window Channel Reduction")
         reducer = build_window_reducer(config.window_reducer, device)
 
-    feature_extractor = FeatureExtractor(segmentation_model).to(device)
+    feature_with_conv_reducer = (
+        False if "feature_conv_reducer" not in config else config.feature_conv_reducer
+    )
+
+    if feature_with_conv_reducer:
+        print("Using Feature Extractor with Convolutional Reducer")
+        freeze_encoder = (
+            False if "freeze_encoder" not in config else config.freeze_encoder
+        )
+        feature_extractor = FeatureExtractorWithConvReducer(
+            segmentation_model,
+            hyperspectral_channels=826,
+            freeze_encoder=freeze_encoder,
+            encoder_in_channels=config.in_channels,
+        ).to(device)
+    else:
+        feature_extractor = FeatureExtractor(segmentation_model).to(device)
+
     classifier = Classifier(segmentation_model).to(device)
     discriminator = PixelDiscriminator(
         input_nc=get_encoder(config.encoder, config.in_channels).out_channels[-1],
@@ -179,6 +198,7 @@ def init_model_and_train(
         with_contrastive_loss=with_contrastive_loss,
         penalize_rings_weight=penalize_rings_weight,
         choose_indices=choose_indices,
+        save_path=save_path,
     )
     if evaluate:
         if config.model:
@@ -189,7 +209,7 @@ def init_model_and_train(
                     reducer, feature_extractor, classifier
                 )
             )
-            model = load_model(model, f"./models/{config.model}.pth", device)
+            model = load_model(model, os.path.join(save_path, f"{config.model}.pth"), device)
         evaluate_model(model, testloader_target, device)
         evaluate_model_with_postprocessing(
             model, testloader_target, testloader_target_rings, device
@@ -221,6 +241,7 @@ def train_and_validate(
     with_contrastive_loss=False,
     penalize_rings_weight=0.25,
     choose_indices=[0, 1, 2, 3, 4],
+    save_path='models',
 ):
     train_losses, domain_losses, val_losses_source, val_losses_target = [], [], [], []
     highest_dice = 0
@@ -234,8 +255,6 @@ def train_and_validate(
         len(trainloader_source),
         len(trainloader_target),
     )
-    # Define the contrastive loss function
-    contrastive_loss_fn = nn.CrossEntropyLoss()
 
     for epoch in range(epochs):
         feature_extractor.train()
@@ -432,10 +451,13 @@ def train_and_validate(
         if model_name:
             if dice_score_postprocessed > highest_dice:
                 highest_dice = dice_score_postprocessed
-                torch.save(model.state_dict(), f"./models/{model_name}.pth")
+                if not os.path.exists(save_path):
+                    os.makedirs(save_path)
+                model_path = os.path.join(save_path, f"{model_name}.pth")
+                torch.save(model.state_dict(), model_path)
                 if save_wandb:
                     model_artifact = wandb.Artifact(f"{model_name}", type="model")
-                    model_artifact.add_file(f"./models/{model_name}.pth")
+                    model_artifact.add_file(model_path)
                     wandb.log_artifact(model_artifact)
 
         print(
@@ -501,6 +523,13 @@ def train_sweep(config=None):
     with wandb.init(config=config) as run:
         config = wandb.config
         config["model"] = run.name
+        
+        api = wandb.Api()
+        sweep = api.sweep(run.sweep_id)
+        sweep_name = sweep.name
+        save_path = os.path.join("./models", sweep_name)
+        os.makedirs(save_path, exist_ok=True)
+        
         (
             trainloader_source,
             validationloader_source,
@@ -522,6 +551,7 @@ def train_sweep(config=None):
             evaluate=True,
             with_overlays=True,
             save_wandb=False,
+            save_path=save_path,
         )
         _, _, _, _, dice_score = evaluate_model_with_postprocessing(
             model,
@@ -530,25 +560,25 @@ def train_sweep(config=None):
             config.device,
             with_wandb=False,
         )
-        api = wandb.Api()
-        sweep = api.sweep(run.sweep_id)
+
         best_run = sweep.best_run(order="test/dice_score_postprocessed")
         current_best_dice = best_run.summary.get("best_dice", float("-inf"))
 
         if dice_score > current_best_dice:
             print(f"New best dice score: {dice_score} found in run {run.name}")
             previous_best_model = best_run.summary.get("best_model_name", None)
-            if previous_best_model and os.path.exists(
-                f"./models/{previous_best_model}.pth"
-            ):
-                os.remove(f"./models/{previous_best_model}.pth")
-                print(f"Removed model {previous_best_model}.pth")
+            if previous_best_model:
+                previous_best_model_path = os.join(save_path, f"{previous_best_model}.pth")
+                if os.path.exists(previous_best_model_path):
+                    os.remove(previous_best_model_path)
+                    print(f"Removed model previous best model {previous_best_model}.pth")
 
             run.summary["best_dice"] = dice_score
             run.summary["best_model_name"] = config.model
         else:
-            if os.path.exists(f"./models/{config.model}.pth"):
-                os.remove(f"./models/{config.model}.pth")
+            current_model_path = os.path.join(save_path, f"{config.model}.pth")
+            if os.path.exists(current_model_path):
+                os.remove(current_model_path)
                 print(f"Removed non-best model {config.model}.pth")
         torch.cuda.empty_cache()
         del model

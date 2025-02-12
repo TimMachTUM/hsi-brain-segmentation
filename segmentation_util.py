@@ -13,7 +13,7 @@ from ipywidgets import interact, FloatSlider, fixed
 import torch.nn.functional as F
 from monai.losses.cldice import SoftDiceclDiceLoss
 
-from FADA.feature_extractor import FeatureExtractorWithConvReducer
+from FADA.feature_extractor import BaseFeatureExtractorWithDimReduction
 
 
 def train_and_validate(
@@ -139,8 +139,8 @@ def log_segmentation_example(
     if channel_reducer:
         inputs = channel_reducer(inputs.unsqueeze(0).to(device)).squeeze(0)
         
-    if isinstance(model.feature_extractor, FeatureExtractorWithConvReducer):
-        inputs = model.feature_extractor.reduce_for_visualization(
+    if isinstance(model.feature_extractor, BaseFeatureExtractorWithDimReduction):
+        inputs = model.feature_extractor.forward_transform(
             inputs.unsqueeze(0).to(device)
         ).squeeze(0)
 

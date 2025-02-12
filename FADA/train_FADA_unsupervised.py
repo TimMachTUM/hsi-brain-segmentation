@@ -9,7 +9,12 @@ from FADA.segmentation_model import (
 )
 from FADA.discriminator import PixelDiscriminator
 from FADA.classifier import Classifier
-from FADA.feature_extractor import FeatureExtractor, FeatureExtractorWithConvReducer
+from FADA.feature_extractor import (
+    FeatureExtractor,
+    FeatureExtractorWith1x1ConvReducer,
+    FeatureExtractorWithCNN,
+    BaseFeatureExtractorWithDimReduction,
+)
 from dataset import (
     build_FIVES_random_crops_dataloaders,
     build_hsi_dataloader,
@@ -17,6 +22,7 @@ from dataset import (
 )
 from dimensionality_reduction.gaussian import build_gaussian_channel_reducer
 from dimensionality_reduction.window_reducer import build_window_reducer
+from dimensionality_reduction.cycle_GAN import GeneratorF
 from segmentation_util import (
     evaluate_model_with_postprocessing,
     load_model,
@@ -47,7 +53,7 @@ def model_pipeline(
     evaluate=True,
     with_overlays=False,
     save_wandb=True,
-    save_path='models',
+    save_path="models",
 ):
     with wandb.init(project=project, config=config, name=config["model"]):
         config = wandb.config
@@ -90,7 +96,7 @@ def init_model_and_train(
     evaluate,
     with_overlays,
     save_wandb=True,
-    save_path='models',
+    save_path="models",
 ):
     num_classes = config.classes if "classes" in config else 1
     choose_indices = (
@@ -129,20 +135,30 @@ def init_model_and_train(
         reducer = build_window_reducer(config.window_reducer, device)
 
     feature_with_conv_reducer = (
-        False if "feature_conv_reducer" not in config else config.feature_conv_reducer
+        None if "feature_conv_reducer" not in config else config.feature_conv_reducer
     )
 
     if feature_with_conv_reducer:
-        print("Using Feature Extractor with Convolutional Reducer")
+        print(
+            f"Using Feature Extractor with Convolutional Reducer: {feature_with_conv_reducer}"
+        )
         freeze_encoder = (
             False if "freeze_encoder" not in config else config.freeze_encoder
         )
-        feature_extractor = FeatureExtractorWithConvReducer(
-            segmentation_model,
-            hyperspectral_channels=826,
-            freeze_encoder=freeze_encoder,
-            encoder_in_channels=config.in_channels,
-        ).to(device)
+        if feature_with_conv_reducer == "cnn":
+            feature_extractor = FeatureExtractorWithCNN(
+                segmentation_model,
+                hyperspectral_channels=826,
+                freeze_encoder=freeze_encoder,
+                encoder_in_channels=config.in_channels,
+            ).to(device)
+        else:
+            feature_extractor = FeatureExtractorWith1x1ConvReducer(
+                segmentation_model,
+                hyperspectral_channels=826,
+                freeze_encoder=freeze_encoder,
+                encoder_in_channels=config.in_channels,
+            ).to(device)
     else:
         feature_extractor = FeatureExtractor(segmentation_model).to(device)
 
@@ -173,6 +189,9 @@ def init_model_and_train(
     penalize_rings_weight = (
         config.penalize_rings_weight if "penalize_rings_weight" in config else 0.25
     )
+    cycle_loss_hyperparams = (
+        config.cycle_loss_hyperparams if "cycle_loss_hyperparams" in config else None
+    )
 
     train_loss, domain_loss, val_loss_source, val_loss_target = train_and_validate(
         feature_extractor,
@@ -195,6 +214,7 @@ def init_model_and_train(
         with_overlays=with_overlays,
         hsi_reducer=reducer,
         save_wandb=save_wandb,
+        cycle_loss_hyperparams=cycle_loss_hyperparams,
         with_contrastive_loss=with_contrastive_loss,
         penalize_rings_weight=penalize_rings_weight,
         choose_indices=choose_indices,
@@ -209,7 +229,9 @@ def init_model_and_train(
                     reducer, feature_extractor, classifier
                 )
             )
-            model = load_model(model, os.path.join(save_path, f"{config.model}.pth"), device)
+            model = load_model(
+                model, os.path.join(save_path, f"{config.model}.pth"), device
+            )
         evaluate_model(model, testloader_target, device)
         evaluate_model_with_postprocessing(
             model, testloader_target, testloader_target_rings, device
@@ -239,9 +261,10 @@ def train_and_validate(
     hsi_reducer=None,
     save_wandb=True,
     with_contrastive_loss=False,
+    cycle_loss_hyperparams=None,
     penalize_rings_weight=0.25,
     choose_indices=[0, 1, 2, 3, 4],
-    save_path='models',
+    save_path="models",
 ):
     train_losses, domain_losses, val_losses_source, val_losses_target = [], [], [], []
     highest_dice = 0
@@ -255,6 +278,13 @@ def train_and_validate(
         len(trainloader_source),
         len(trainloader_target),
     )
+    with_cycle_loss = cycle_loss_hyperparams is not None
+
+    if with_cycle_loss:
+        print("Initializing Cycle Loss Setup")
+        generator_F, cycle_loss_fn, optimizer_F, optimizer_G = init_cycle_loss_setup(
+            feature_extractor, device, cycle_loss_hyperparams
+        )
 
     for epoch in range(epochs):
         feature_extractor.train()
@@ -318,6 +348,18 @@ def train_and_validate(
                 weighted_contrastive_loss = penalize_rings_weight * contrastive_loss
                 running_loss += weighted_contrastive_loss.item()
                 weighted_contrastive_loss.backward()
+
+            if with_cycle_loss:
+                cycle_loss_backward_step(
+                    feature_extractor,
+                    cycle_loss_hyperparams,
+                    generator_F,
+                    cycle_loss_fn,
+                    optimizer_F,
+                    optimizer_G,
+                    src_input,
+                    tgt_input,
+                )
 
             optimizer_fea.step()
             optimizer_cls.step()
@@ -495,6 +537,55 @@ def train_and_validate(
     return train_losses, domain_losses, val_losses_source, val_losses_target
 
 
+def cycle_loss_backward_step(
+    feature_extractor,
+    cycle_loss_hyperparams,
+    generator_F,
+    cycle_loss_fn,
+    optimizer_F,
+    optimizer_G,
+    src_input,
+    tgt_input,
+):
+    if isinstance(feature_extractor, BaseFeatureExtractorWithDimReduction):
+        # F(G(x)) -> x
+        fives_like = feature_extractor.forward_transform(tgt_input)
+        cycle_loss_F = cycle_loss_hyperparams["lambda_F"] * cycle_loss_fn(
+            generator_F(fives_like), tgt_input
+        )
+
+        # G(F(y)) -> y
+        hsi_from_fives = generator_F(src_input)
+        cycle_loss_G = cycle_loss_hyperparams["lambda_G"] * cycle_loss_fn(
+            feature_extractor.forward_transform(hsi_from_fives), src_input
+        )
+        optimizer_G.zero_grad()
+        optimizer_F.zero_grad()
+
+        total_cycle_loss = cycle_loss_F + cycle_loss_G
+        total_cycle_loss.backward()
+        optimizer_F.step()
+        optimizer_G.step()
+
+
+def init_cycle_loss_setup(feature_extractor, device, cycle_loss_hyperparams):
+    cycle_loss = nn.L1Loss()
+    generator_F = GeneratorF(
+        in_channels=feature_extractor.expected_channels,
+        out_channels=feature_extractor.hyperspectral_channels,
+        num_filters=64,
+    ).to(device)
+    optimizer_F = torch.optim.Adam(
+        generator_F.parameters(), lr=cycle_loss_hyperparams["lr_F"]
+    )
+    optimizer_G = torch.optim.Adam(
+        list(feature_extractor.dim_reduction.parameters())
+        + list(feature_extractor.cnn_transform.parameters()),
+        lr=cycle_loss_hyperparams["lr_G"],
+    )
+    return (generator_F, cycle_loss, optimizer_F, optimizer_G)
+
+
 def black_ring_loss_only(tgt_pred, black_ring_mask):
     """
     tgt_pred: logits of shape [N, 3, H, W]
@@ -523,13 +614,13 @@ def train_sweep(config=None):
     with wandb.init(config=config) as run:
         config = wandb.config
         config["model"] = run.name
-        
+
         api = wandb.Api()
         sweep = api.sweep(run.sweep_id)
         sweep_name = sweep.name
         save_path = os.path.join("./models", sweep_name)
         os.makedirs(save_path, exist_ok=True)
-        
+
         (
             trainloader_source,
             validationloader_source,
@@ -560,6 +651,9 @@ def train_sweep(config=None):
             config.device,
             with_wandb=False,
         )
+        
+        api = wandb.Api()
+        sweep = api.sweep(run.sweep_id)
 
         best_run = sweep.best_run(order="test/dice_score_postprocessed")
         current_best_dice = best_run.summary.get("best_dice", float("-inf"))
@@ -568,10 +662,15 @@ def train_sweep(config=None):
             print(f"New best dice score: {dice_score} found in run {run.name}")
             previous_best_model = best_run.summary.get("best_model_name", None)
             if previous_best_model:
-                previous_best_model_path = os.join(save_path, f"{previous_best_model}.pth")
+                previous_best_model_path = os.path.join(
+                    save_path, f"{previous_best_model}.pth"
+                )
+                print('previous_model_path', previous_best_model_path)
                 if os.path.exists(previous_best_model_path):
                     os.remove(previous_best_model_path)
-                    print(f"Removed model previous best model {previous_best_model}.pth")
+                    print(
+                        f"Removed model previous best model {previous_best_model}.pth"
+                    )
 
             run.summary["best_dice"] = dice_score
             run.summary["best_model_name"] = config.model

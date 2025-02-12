@@ -10,70 +10,102 @@ class FeatureExtractor(nn.Module):
         features = self.encoder(x)
         return features
     
-class FeatureExtractorWithConvReducer(nn.Module):
+class BaseFeatureExtractorWithDimReduction(nn.Module):
+    """
+    Base class for feature extraction that includes the 1x1 convolution (for dimensionality reduction)
+    and the pretrained encoder. Subclasses can add additional processing (e.g. CNN transformation).
+    """
     def __init__(self, base_model, hyperspectral_channels=826, freeze_encoder=False, encoder_in_channels=1):
         """
         Args:
             base_model (nn.Module): Pretrained segmentation model containing:
-                                    - base_model.in_channels: expected input channels for the encoder.
-                                    - base_model.encoder: the feature extraction (encoder) module.
-            hyperspectral_channels (int): Number of channels for hyperspectral input data.
-            freeze_encoder (bool): If True, the encoder's parameters will not be updated.
+                                    - base_model.encoder: the encoder module.
+            hyperspectral_channels (int): Number of channels in the hyperspectral input.
+            freeze_encoder (bool): If True, freeze the encoder's parameters.
+            encoder_in_channels (int): Number of channels expected by the encoder.
         """
-        super(FeatureExtractorWithConvReducer, self).__init__()
+        super(BaseFeatureExtractorWithDimReduction, self).__init__()
         
-        # Store the expected number of channels (e.g., 1 or 3)
         self.expected_channels = encoder_in_channels
         self.hyperspectral_channels = hyperspectral_channels
         
-        # Create the 1x1 convolution for dimensionality reduction.
+        # 1x1 convolution for dimensionality reduction.
         self.dim_reduction = nn.Conv2d(
             in_channels=self.hyperspectral_channels,
             out_channels=self.expected_channels,
             kernel_size=1
         )
         
-        # CNN transformation block that preserves spatial dimensions.
-        # self.cnn_transform = nn.Sequential(
-        #     nn.Conv2d(self.expected_channels, self.expected_channels, kernel_size=3, padding=1),
-        #     nn.BatchNorm2d(self.expected_channels),
-        #     nn.ReLU(inplace=True),
-        #     nn.Conv2d(self.expected_channels, self.expected_channels, kernel_size=3, padding=1),
-        #     nn.BatchNorm2d(self.expected_channels),
-        #     nn.ReLU(inplace=True)
-        # )
-        
         # The pretrained encoder from the base model.
         self.encoder = base_model.encoder
         
-        # Optionally freeze the encoder.
+        # Optionally freeze the encoder parameters.
         if freeze_encoder:
             for param in self.encoder.parameters():
                 param.requires_grad = False
 
+class FeatureExtractorWithCNN(BaseFeatureExtractorWithDimReduction):
+    """
+    Feature extractor that applies the 1x1 conv reducer followed by a CNN transformation
+    before passing the result into the encoder.
+    """
+    def __init__(self, base_model, hyperspectral_channels=826, freeze_encoder=False, encoder_in_channels=1):
+        super(FeatureExtractorWithCNN, self).__init__(
+            base_model, hyperspectral_channels, freeze_encoder, encoder_in_channels
+        )
+        
+        # CNN transformation block that preserves spatial dimensions.
+        self.cnn_transform = nn.Sequential(
+            nn.Conv2d(self.expected_channels, self.expected_channels, kernel_size=3, padding=1),
+            nn.BatchNorm2d(self.expected_channels),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(self.expected_channels, self.expected_channels, kernel_size=3, padding=1),
+            nn.BatchNorm2d(self.expected_channels),
+            nn.ReLU(inplace=True)
+        )
+    
     def forward(self, x):
-        # x: shape (batch_size, channels, height, width)
-        # If the input channel count does not match what the encoder expects, apply dimensionality reduction.
+        # If the input channel count doesn't match the expected channels, reduce and transform.
         if x.shape[1] != self.expected_channels:
             x = self.dim_reduction(x)
-            # Apply the CNN transformation.
-            # x = self.cnn_transform(x)
-        # Extract high-level features using the encoder.
+            x = self.cnn_transform(x)
+        # Extract features using the encoder.
         features = self.encoder(x)
         return features
     
-    def reduce_for_visualization(self, x):
+    def forward_transform(self, x):
         """
-        Applies the dimensionality reduction and CNN transformation without passing the data through the encoder.
-        Use this method to visualize the representation that the segmentation network would see.
-        
-        Args:
-            x (Tensor): Input image tensor of shape (batch_size, channels, height, width)
-            
-        Returns:
-            Tensor: The transformed image after reduction and CNN transformation.
+        Applies the dimensionality reduction and CNN transformation without passing
+        the data through the encoder. This is useful for visualization or computing cycle loss.
         """
         if x.shape[1] != self.expected_channels:
             x = self.dim_reduction(x)
-            # x = self.cnn_transform(x)
+            x = self.cnn_transform(x)
+        return x
+
+class FeatureExtractorWith1x1ConvReducer(BaseFeatureExtractorWithDimReduction):
+    """
+    Feature extractor that applies only the 1x1 convolution (dimensionality reduction)
+    before passing the result into the encoder.
+    """
+    def __init__(self, base_model, hyperspectral_channels=826, freeze_encoder=False, encoder_in_channels=1):
+        super(FeatureExtractorWith1x1ConvReducer, self).__init__(
+            base_model, hyperspectral_channels, freeze_encoder, encoder_in_channels
+        )
+        # No additional CNN transformation block.
+    
+    def forward(self, x):
+        # If the input channel count doesn't match the expected channels, reduce only.
+        if x.shape[1] != self.expected_channels:
+            x = self.dim_reduction(x)
+        features = self.encoder(x)
+        return features
+    
+    def forward_transform(self, x):
+        """
+        Applies only the dimensionality reduction (1x1 conv) without passing the result
+        through the encoder. Useful for visualization or auxiliary losses.
+        """
+        if x.shape[1] != self.expected_channels:
+            x = self.dim_reduction(x)
         return x

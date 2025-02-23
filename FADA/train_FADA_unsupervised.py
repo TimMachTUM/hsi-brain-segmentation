@@ -151,6 +151,7 @@ def init_model_and_train(
                 hyperspectral_channels=826,
                 freeze_encoder=freeze_encoder,
                 encoder_in_channels=config.in_channels,
+                kernel_size=config.kernel_size if "kernel_size" in config else 3,
             ).to(device)
         else:
             feature_extractor = FeatureExtractorWith1x1ConvReducer(
@@ -578,11 +579,18 @@ def init_cycle_loss_setup(feature_extractor, device, cycle_loss_hyperparams):
     optimizer_F = torch.optim.Adam(
         generator_F.parameters(), lr=cycle_loss_hyperparams["lr_F"]
     )
-    optimizer_G = torch.optim.Adam(
-        list(feature_extractor.dim_reduction.parameters())
-        + list(feature_extractor.cnn_transform.parameters()),
-        lr=cycle_loss_hyperparams["lr_G"],
-    )
+    if isinstance(feature_extractor, FeatureExtractorWithCNN):
+        optimizer_G = torch.optim.Adam(
+            list(feature_extractor.dim_reduction.parameters())
+            + list(feature_extractor.cnn_transform.parameters()),
+            lr=cycle_loss_hyperparams["lr_G"],
+        )
+    else:
+        optimizer_G = torch.optim.Adam(
+            list(feature_extractor.dim_reduction.parameters()),
+            lr=cycle_loss_hyperparams["lr_G"],
+        )
+
     return (generator_F, cycle_loss, optimizer_F, optimizer_G)
 
 
@@ -651,7 +659,7 @@ def train_sweep(config=None):
             config.device,
             with_wandb=False,
         )
-        
+
         api = wandb.Api()
         sweep = api.sweep(run.sweep_id)
 
@@ -665,7 +673,6 @@ def train_sweep(config=None):
                 previous_best_model_path = os.path.join(
                     save_path, f"{previous_best_model}.pth"
                 )
-                print('previous_model_path', previous_best_model_path)
                 if os.path.exists(previous_best_model_path):
                     os.remove(previous_best_model_path)
                     print(

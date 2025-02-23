@@ -49,17 +49,19 @@ class FeatureExtractorWithCNN(BaseFeatureExtractorWithDimReduction):
     Feature extractor that applies the 1x1 conv reducer followed by a CNN transformation
     before passing the result into the encoder.
     """
-    def __init__(self, base_model, hyperspectral_channels=826, freeze_encoder=False, encoder_in_channels=1):
+    def __init__(self, base_model, hyperspectral_channels=826, freeze_encoder=False, encoder_in_channels=1, kernel_size=3):
         super(FeatureExtractorWithCNN, self).__init__(
             base_model, hyperspectral_channels, freeze_encoder, encoder_in_channels
         )
         
+        padding = kernel_size // 2
+        
         # CNN transformation block that preserves spatial dimensions.
         self.cnn_transform = nn.Sequential(
-            nn.Conv2d(self.expected_channels, self.expected_channels, kernel_size=3, padding=1),
+            nn.Conv2d(self.expected_channels, self.expected_channels, kernel_size=kernel_size, padding=padding),
             nn.BatchNorm2d(self.expected_channels),
             nn.ReLU(inplace=True),
-            nn.Conv2d(self.expected_channels, self.expected_channels, kernel_size=3, padding=1),
+            nn.Conv2d(self.expected_channels, self.expected_channels, kernel_size=kernel_size, padding=padding),
             nn.BatchNorm2d(self.expected_channels),
             nn.ReLU(inplace=True)
         )

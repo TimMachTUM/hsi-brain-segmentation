@@ -12,6 +12,7 @@ from typing import Literal
 from ipywidgets import interact, FloatSlider, fixed
 import torch.nn.functional as F
 from monai.losses.cldice import SoftDiceclDiceLoss
+from metrics.cldice import clDice
 
 from FADA.feature_extractor import BaseFeatureExtractorWithDimReduction
 
@@ -138,7 +139,7 @@ def log_segmentation_example(
     # Assuming inputs are in a suitable format (e.g., normalized between 0 and 1 or uint8)
     if channel_reducer:
         inputs = channel_reducer(inputs.unsqueeze(0).to(device)).squeeze(0)
-        
+
     if isinstance(model.feature_extractor, BaseFeatureExtractorWithDimReduction):
         inputs = model.feature_extractor.forward_transform(
             inputs.unsqueeze(0).to(device)
@@ -233,6 +234,7 @@ def evaluate_model_with_postprocessing(
     f1_score = 0
     accuracy = 0
     dice_score = 0
+    cl_dice_score = 0
 
     with torch.no_grad():
         for (i, data), (_, ring_data) in zip(
@@ -256,12 +258,16 @@ def evaluate_model_with_postprocessing(
             accuracy += smp.metrics.accuracy(tp, fp, fn, tn, reduction="micro")
 
             dice_score += dice_coefficient(predictions, labels)
+            pred_2d = predictions.squeeze().cpu().numpy()
+            labels_2d = labels.squeeze().cpu().numpy()
+            cl_dice_score += clDice(pred_2d, labels_2d)
 
     precision /= len(dataloader)
     recall /= len(dataloader)
     f1_score /= len(dataloader)
     accuracy /= len(dataloader)
     dice_score /= len(dataloader)
+    cl_dice_score /= len(dataloader)
 
     if with_wandb:
         wandb.log(
@@ -271,13 +277,14 @@ def evaluate_model_with_postprocessing(
                 "test/f1_score_postprocessed": f1_score,
                 "test/accuracy_postprocessed": accuracy,
                 "test/dice_score_postprocessed": dice_score,
+                "test/cl_dice_score_postprocessed": cl_dice_score,
             }
         )
 
     print(
-        f"Precision: {precision:.4f}, Recall: {recall:.4f}, F1 Score: {f1_score:.4f}, Dice Score: {dice_score:.4f}, Accuracy: {accuracy:.4f}"
+        f"Precision: {precision:.4f}, Recall: {recall:.4f}, F1 Score: {f1_score:.4f}, Dice Score: {dice_score:.4f}, CL Dice Score: {cl_dice_score:.4f}, Accuracy: {accuracy:.4f}"
     )
-    return precision, recall, f1_score, accuracy, dice_score
+    return precision, recall, f1_score, accuracy, dice_score, cl_dice_score
 
 
 def evaluate_model(model, dataloader, device, with_wandb=True, threshold=0.5):
@@ -578,6 +585,7 @@ def cross_testing(model_paths, device, build_func, model_params, window=None):
     total_recall = 0
     total_accuracy = 0
     total_dice_score = 0
+    total_cl_dice_score = 0
     for image_index, model_path in model_paths.items():
         test_indices = list({0, 1, 2, 3, 4} - {image_index})
         testloader, testloader_ring_dir = build_hsi_testloader(
@@ -592,22 +600,33 @@ def cross_testing(model_paths, device, build_func, model_params, window=None):
         print(
             f"Testing model {model_path} hyperparameter-finetuned on image {image_index} testing on images {test_indices}"
         )
-        precision, recall, _, accuracy, dice_score = evaluate_model_with_postprocessing(
-            model, testloader, testloader_ring_dir, device, with_wandb=False
+        precision, recall, _, accuracy, dice_score, cl_dice_score = (
+            evaluate_model_with_postprocessing(
+                model, testloader, testloader_ring_dir, device, with_wandb=False
+            )
         )
 
         total_accuracy += accuracy
         total_precision += precision
         total_recall += recall
         total_dice_score += dice_score
+        total_cl_dice_score += cl_dice_score
+
     total_accuracy /= len(model_paths)
     total_precision /= len(model_paths)
     total_recall /= len(model_paths)
     total_dice_score /= len(model_paths)
+    total_cl_dice_score /= len(model_paths)
     print(
-        f"Average Precision: {total_precision:.4f}, Average Recall: {total_recall:.4f}, Average Accuracy: {total_accuracy:.4f}, Average Dice Score: {total_dice_score:.4f}"
+        f"Average Precision: {total_precision:.4f}, Average Recall: {total_recall:.4f}, Average Accuracy: {total_accuracy:.4f}, Average Dice Score: {total_dice_score:.4f}, Average CL Dice Score: {total_cl_dice_score:.4f}"
     )
-    return total_precision, total_recall, total_accuracy, total_dice_score
+    return (
+        total_precision,
+        total_recall,
+        total_accuracy,
+        total_dice_score,
+        cl_dice_score,
+    )
 
 
 def build_ensemble_model(path, device):

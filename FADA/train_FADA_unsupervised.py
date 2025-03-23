@@ -482,7 +482,7 @@ def train_and_validate(
         precision_target, _, _, _, dice_score_target = evaluate_model(
             model, testloader_target, device, with_wandb=False
         )
-        precision_target_postprocessed, _, _, _, dice_score_postprocessed = (
+        precision_target_postprocessed, _, _, _, dice_score_postprocessed, _ = (
             evaluate_model_with_postprocessing(
                 model,
                 testloader_target,
@@ -652,7 +652,7 @@ def train_sweep(config=None):
             save_wandb=False,
             save_path=save_path,
         )
-        _, _, _, _, dice_score = evaluate_model_with_postprocessing(
+        _, _, _, _, dice_score, _ = evaluate_model_with_postprocessing(
             model,
             testloader_target,
             testloader_target_rings,
@@ -669,6 +669,7 @@ def train_sweep(config=None):
         if dice_score > current_best_dice:
             print(f"New best dice score: {dice_score} found in run {run.name}")
             previous_best_model = best_run.summary.get("best_model_name", None)
+            print("Previous best model: ", previous_best_model)
             if previous_best_model:
                 previous_best_model_path = os.path.join(
                     save_path, f"{previous_best_model}.pth"

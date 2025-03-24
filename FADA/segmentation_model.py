@@ -1,7 +1,7 @@
 import torch.nn as nn
 
 from FADA.classifier import Classifier
-from FADA.feature_extractor import FeatureExtractor
+from FADA.feature_extractor import FeatureExtractor, FeatureExtractorWith1x1ConvReducer, FeatureExtractorWithCNN
 from dimensionality_reduction.gaussian import build_gaussian_channel_reducer
 from dimensionality_reduction.window_reducer import build_window_reducer, build_single_window_reducer
 from segmentation_util import build_segmentation_model, load_model
@@ -116,3 +116,36 @@ def build_baseline_segmentation_model_with_window_reducer(
     return SegmentationWithChannelReducerFADA(
         window_reducer, feature_extractor, classifier
     ).to(device)
+    
+def build_FADA_segmentation_model_with_dimensionality_reduction(
+    architecture,
+    encoder,
+    path,
+    device,
+    kernel_size=3,
+    in_channels=1,
+    feature_conv_reducer="cnn",
+):
+    segmentation_model = build_segmentation_model(
+        architecture=architecture,
+        encoder=encoder,
+        device=device,
+        in_channels=in_channels,
+    )
+    if feature_conv_reducer == "cnn":
+        feature_extractor = FeatureExtractorWithCNN(
+            segmentation_model,
+            hyperspectral_channels=826,
+            encoder_in_channels=in_channels,
+            kernel_size=kernel_size,
+        ).to(device)
+    else:
+        feature_extractor = FeatureExtractorWith1x1ConvReducer(
+            segmentation_model,
+            hyperspectral_channels=826,
+            encoder_in_channels=in_channels,
+        ).to(device)
+    classifier = Classifier(segmentation_model).to(device)
+    model = SegmentationModelFADA(feature_extractor, classifier).to(device)
+    model = load_model(model, path, device)
+    return model

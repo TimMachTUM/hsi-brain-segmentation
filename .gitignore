@@ -5,3 +5,4 @@ wandb/
 004-02/
 data/
 out
+.env

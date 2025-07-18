@@ -1,4 +1,4 @@
-name: FADA-Gaussian-with-Prior-Learning-Rate-Sweep
+name: FADA-Gaussian-Comic-Sweep-Learning-Rate-Sweep
 method: bayes
 parameters:
   architecture:
@@ -33,7 +33,7 @@ parameters:
   pretrained:
     value: ./models/serene-sweep-9.pth
   gaussian:
-    value: models/gaussianEncoder_with_priors.pth
+    value: models/gcr_comic-sweep.pth
   augmented:
     value: true
 metric:

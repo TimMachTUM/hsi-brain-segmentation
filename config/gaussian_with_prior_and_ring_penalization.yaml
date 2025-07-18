@@ -33,8 +33,10 @@ parameters:
     value: models/gaussianEncoder_with_priors.pth
   augmented:
     value: true
-  contrastive_loss:
+  with_contrastive_loss:
     value: true
+  ring_label_dir:
+    value: ./data/helicoid_ring_labels
   penalize_rings_weight:
     min: 0
     max: 10
